@@ -171,7 +171,7 @@ export const appDataSchema = z.object({
     z.string().regex(/^[a-f0-9]{64}$/),
     z.object({
       trackId: z.string().regex(/^[a-f0-9]{64}$/),
-      source: z.enum(['lrclib', 'local-lrc', 'local-txt', 'manual']),
+      source: z.enum(['lrclib', 'lyrica', 'local-lrc', 'local-txt', 'manual']),
       syncedLyrics: z.string().max(2_000_000).optional(),
       plainLyrics: z.string().max(2_000_000).optional(),
       instrumental: z.boolean().optional(),
@@ -179,6 +179,9 @@ export const appDataSchema = z.object({
       fetchedAt: z.number().nonnegative(),
       matchedTitle: z.string().max(500).optional(),
       matchedArtist: z.string().max(500).optional(),
+      provider: z.enum(['lrclib', 'lyrica']).optional(),
+      providerSource: z.string().max(60).optional(),
+      sourceLabel: z.string().max(100).optional(),
       userSelected: z.boolean().optional(),
     }),
   ),

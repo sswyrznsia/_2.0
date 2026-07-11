@@ -55,7 +55,7 @@ export async function loadTrackLyrics(trackId: string): Promise<LyricsResult> {
     if (!match) return { kind: 'none', content: '', status: lookup.status }
     data.lyrics[trackId] = {
       trackId,
-      source: 'lrclib',
+      source: match.provider === 'lyrica' ? 'lyrica' : 'lrclib',
       syncedLyrics: match.syncedLyrics,
       plainLyrics: match.plainLyrics,
       instrumental: match.instrumental,
@@ -63,6 +63,9 @@ export async function loadTrackLyrics(trackId: string): Promise<LyricsResult> {
       fetchedAt: Date.now(),
       matchedTitle: match.trackName,
       matchedArtist: match.artistName,
+      provider: match.provider,
+      providerSource: match.providerSource,
+      sourceLabel: match.sourceLabel,
       userSelected: false,
     }
     setStoredData(data)
@@ -81,10 +84,17 @@ export async function searchTrackLyrics(
   trackId: string,
   query?: LyricsSearchQuery,
 ): Promise<LyricsSearchResult> {
-  const track = getStoredData().tracks.find((item) => item.id === trackId)
+  const data = getStoredData()
+  const track = data.tracks.find((item) => item.id === trackId)
   if (!track)
     return { status: 'metadata-missing', candidates: [], normalizedTitle: '' }
-  return lyricsService.lookup(track, 1.1, query)
+  return lyricsService.lookup(
+    track,
+    data.settings.lyricsAutoMatchThreshold,
+    query,
+    undefined,
+    false,
+  )
 }
 
 export function saveLyricsSelection(
@@ -96,7 +106,7 @@ export function saveLyricsSelection(
     return { kind: 'none', content: '' }
   data.lyrics[trackId] = {
     trackId,
-    source: 'lrclib',
+    source: candidate.provider === 'lyrica' ? 'lyrica' : 'lrclib',
     syncedLyrics: candidate.syncedLyrics,
     plainLyrics: candidate.plainLyrics,
     instrumental: candidate.instrumental,
@@ -104,6 +114,9 @@ export function saveLyricsSelection(
     fetchedAt: Date.now(),
     matchedTitle: candidate.trackName,
     matchedArtist: candidate.artistName,
+    provider: candidate.provider,
+    providerSource: candidate.providerSource,
+    sourceLabel: candidate.sourceLabel,
     userSelected: true,
   }
   delete data.lyricsSyncProfiles[trackId]
@@ -149,7 +162,7 @@ export async function autoFetchImportedTrackLyrics(trackId: string) {
   if (!match) return
   data.lyrics[trackId] = {
     trackId,
-    source: 'lrclib',
+    source: match.provider === 'lyrica' ? 'lyrica' : 'lrclib',
     syncedLyrics: match.syncedLyrics,
     plainLyrics: match.plainLyrics,
     instrumental: match.instrumental,
@@ -157,6 +170,9 @@ export async function autoFetchImportedTrackLyrics(trackId: string) {
     fetchedAt: Date.now(),
     matchedTitle: match.trackName,
     matchedArtist: match.artistName,
+    provider: match.provider,
+    providerSource: match.providerSource,
+    sourceLabel: match.sourceLabel,
     userSelected: false,
   }
   setStoredData(data)

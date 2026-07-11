@@ -95,7 +95,7 @@ export interface TaskbarToggleSettingsPatch {
 
 export interface TrackLyrics {
   trackId: string
-  source: 'lrclib' | 'local-lrc' | 'local-txt' | 'manual'
+  source: 'lrclib' | 'lyrica' | 'local-lrc' | 'local-txt' | 'manual'
   syncedLyrics?: string
   plainLyrics?: string
   instrumental?: boolean
@@ -103,6 +103,9 @@ export interface TrackLyrics {
   fetchedAt: number
   matchedTitle?: string
   matchedArtist?: string
+  provider?: 'lrclib' | 'lyrica'
+  providerSource?: string
+  sourceLabel?: string
   userSelected?: boolean
 }
 
@@ -129,6 +132,9 @@ export interface LyricsCandidate {
   instrumental: boolean
   score?: number
   durationDelta?: number
+  provider?: 'lrclib' | 'lyrica'
+  providerSource?: string
+  sourceLabel?: string
 }
 
 export type LyricsLookupStatus =

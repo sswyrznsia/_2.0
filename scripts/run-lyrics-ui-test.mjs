@@ -46,6 +46,7 @@ const horizontalCoverScreenshot = path.join(
   'now-playing-cover-horizontal.png',
 )
 let trackARequests = 0
+let lyricaRequests = 0
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function silentWav() {
@@ -337,10 +338,50 @@ const candidates = [
 ]
 
 const server = createServer((request, response) => {
+  if (request.url?.startsWith('/lyrics/')) {
+    const url = new URL(request.url, 'http://127.0.0.1')
+    const song = url.searchParams.get('song') ?? ''
+    lyricaRequests += 1
+    if (song.includes('No Cover Track')) {
+      response.writeHead(500, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ status: 'error' }))
+      return
+    }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    if (song.includes('Slow Track')) {
+      response.end(
+        JSON.stringify({
+          status: 'success',
+          data: {
+            source: 'youtube_transcript',
+            artist: 'Slow Artist',
+            title: 'Slow Track',
+            lyrics: 'Lyrica first line\nLyrica second line',
+            timed_lyrics: [
+              { text: 'Lyrica first line', start_time: 0, end_time: 500, id: 1 },
+              { text: 'Lyrica second line', start_time: 500, end_time: 900, id: 2 },
+            ],
+            metadata: { album: 'Test Album', duration: 200 },
+          },
+        }),
+      )
+    } else
+      response.end(
+        JSON.stringify({
+          status: 'error',
+          error: { message: 'No lyrics found' },
+        }),
+      )
+    return
+  }
   if (request.url?.startsWith('/api/search')) {
     const query =
       new URL(request.url, 'http://127.0.0.1').searchParams.get('q') ?? ''
-    if (query.includes('Slow Track')) {
+    if (
+      query.includes('Slow Track') ||
+      query.includes('No Cover Track') ||
+      query.includes('No Track')
+    ) {
       setTimeout(() => {
         response.writeHead(200, { 'content-type': 'application/json' })
         response.end('[]')
@@ -424,6 +465,7 @@ try {
       VITE_DEV_SERVER_URL: 'http://127.0.0.1:5173/',
       PULSE_SHELF_TEST_USER_DATA: userData,
       PULSE_SHELF_LRCLIB_API: `http://127.0.0.1:${address.port}/api`,
+      PULSE_SHELF_LYRICA_API: `http://127.0.0.1:${address.port}`,
     },
   )
   const page = await waitFor(async () => {
@@ -746,6 +788,47 @@ try {
       ),
     'track B after selecting it',
   )
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-search-panel"))'),
+    'Lyrica fallback search panel',
+  )
+  await cdp.evaluate(
+    'document.querySelector(".lyrics-search-actions .button--primary").click()',
+  )
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-candidate"))'),
+    'Lyrica fallback candidate',
+  )
+  const lyricaCandidateText = await cdp.evaluate(
+    'document.querySelector(".lyrics-candidate").innerText',
+  )
+  if (!lyricaCandidateText.includes('Lyrica · YouTube 자막'))
+    throw new Error(`Lyrica source label is missing: ${lyricaCandidateText}`)
+  await cdp.evaluate('document.querySelector(".lyrics-candidate .button").click()')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".lyrics-synced")?.textContent.includes("Lyrica second line")',
+      ),
+    'selected Lyrica synced lyrics',
+  )
+  const appliedLyricaInfo = await cdp.evaluate(
+    'document.querySelector(".lyrics-applied-info")?.innerText ?? ""',
+  )
+  if (
+    !appliedLyricaInfo.includes('가사 출처: Lyrica · YouTube 자막') ||
+    !appliedLyricaInfo.includes('싱크: 현재 영상 타임스탬프') ||
+    !appliedLyricaInfo.includes('사용자 보정: 없음')
+  )
+    throw new Error(`Applied Lyrica information is incorrect: ${appliedLyricaInfo}`)
+  const savedLyricaLyrics = JSON.parse(
+    await readFile(path.join(userData, 'pulse-shelf-data.json'), 'utf8'),
+  )
+  if (savedLyricaLyrics.data.lyrics[trackBId]?.source !== 'lyrica')
+    throw new Error('Selected Lyrica lyrics did not persist their provider')
+  if (savedLyricaLyrics.data.lyrics[trackBId]?.providerSource !== 'youtube_transcript')
+    throw new Error('Selected Lyrica lyrics did not persist their provider source')
+  const lyricaRequestsAfterSelection = lyricaRequests
   await cdp.evaluate('document.querySelectorAll(".cover-item")[0].click()')
   await waitFor(
     () =>
@@ -785,6 +868,7 @@ try {
       VITE_DEV_SERVER_URL: 'http://127.0.0.1:5173/',
       PULSE_SHELF_TEST_USER_DATA: userData,
       PULSE_SHELF_LRCLIB_API: `http://127.0.0.1:${address.port}/api`,
+      PULSE_SHELF_LYRICA_API: `http://127.0.0.1:${address.port}`,
     },
   )
   const restartedPage = await waitFor(async () => {
@@ -841,6 +925,74 @@ try {
     throw new Error(
       'Restarting the app triggered another LRCLIB request for track A',
     )
+  await cdp.evaluate('document.querySelectorAll(".cover-item")[1].click()')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".now-panel__track strong")?.textContent.includes("Slow Track")',
+      ),
+    'Lyrica track after restart',
+  )
+  await cdp.evaluate(
+    'window.dispatchEvent(new CustomEvent("pulse:panel-tab", { detail: "lyrics" }))',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".lyrics-synced")?.textContent.includes("Lyrica second line")',
+      ),
+    'persisted Lyrica lyrics after restart',
+  )
+  if (lyricaRequests !== lyricaRequestsAfterSelection)
+    throw new Error('Restarting the app triggered another Lyrica request')
+  await cdp.evaluate('document.querySelectorAll(".cover-item")[0].click()')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".now-panel__track strong")?.textContent.includes("Candidate Song")',
+      ),
+    'track A after Lyrica persistence check',
+  )
+  await cdp.evaluate('document.querySelectorAll(".cover-item")[3].click()')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".now-panel__track strong")?.textContent.includes("No Cover Track")',
+      ),
+    'Lyrica error fixture track',
+  )
+  await cdp.evaluate(
+    'window.dispatchEvent(new CustomEvent("pulse:panel-tab", { detail: "lyrics" }))',
+  )
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-search-panel"))'),
+    'lyrics panel after Lyrica server error',
+  )
+  await cdp.evaluate(
+    'document.querySelector(".lyrics-search-actions .button--primary").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        '!document.querySelector(".lyrics-search-actions .button--primary").disabled',
+      ),
+    'search recovery after Lyrica server error',
+  )
+  const unexpectedErrorCandidate = await cdp.evaluate(
+    'document.querySelector(".lyrics-candidate")?.innerText ?? null',
+  )
+  if (unexpectedErrorCandidate)
+    throw new Error(
+      `Lyrica server error unexpectedly produced a candidate: ${unexpectedErrorCandidate}`,
+    )
+  await cdp.evaluate('document.querySelectorAll(".cover-item")[0].click()')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".now-panel__track strong")?.textContent.includes("Candidate Song")',
+      ),
+    'track A after Lyrica error recovery',
+  )
 
   await cdp.evaluate(`window.electronAPI.removeLyrics('${trackAId}')`)
   await cdp.evaluate('document.querySelectorAll(".cover-item")[1].click()')

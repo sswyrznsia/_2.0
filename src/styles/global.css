@@ -1433,7 +1433,7 @@ svg {
   font-size: 14px;
 }
 .lyrics-synced {
-  padding-block: 130px;
+  padding: 16px 0 130px;
 }
 .lyrics-synced > button {
   display: block;
@@ -1457,6 +1457,17 @@ svg {
   padding: 6px 2px;
   color: var(--muted);
   font-size: 11px;
+}
+.lyrics-applied-info {
+  display: grid;
+  gap: 2px;
+  margin: 0 2px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.lyrics-text .lyrics-applied-info {
+  margin: 0 0 12px;
 }
 .lyrics-sync-status button,
 .lyrics-sync-editor button:not(.button) {

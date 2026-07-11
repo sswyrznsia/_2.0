@@ -1,12 +1,14 @@
 import { FileText, Search, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../../stores/playerStore'
+import { useAppStore } from '../../stores/appStore'
 import type {
   LyricsCandidate,
   LyricsLookupStatus,
   LyricsResult,
   LyricsSearchResult,
   LyricsSyncProfile,
+  TrackLyrics,
 } from '../../types/models'
 import { formatTime } from '../../utils/format'
 import { parseLrc } from '../../utils/lyrics'
@@ -40,6 +42,8 @@ export function LyricsView() {
 function LoadedLyrics({ trackId }: { trackId: string }) {
   const currentTime = usePlayerStore((state) => state.currentTime)
   const currentTrack = usePlayerStore((state) => state.currentTrack)
+  const appliedLyrics = useAppStore((state) => state.data?.lyrics[trackId])
+  const refreshData = useAppStore((state) => state.refreshData)
   const [lyrics, setLyrics] = useState<LyricsResult | null>(null)
   const [searchResult, setSearchResult] = useState<LyricsSearchResult | null>(
     null,
@@ -68,7 +72,10 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     void window.electronAPI
       .loadLyrics(trackId)
       .then((result) => {
-        if (active && loadRequestId.current === requestId) setLyrics(result)
+        if (active && loadRequestId.current === requestId) {
+          setLyrics(result)
+          void refreshData()
+        }
       })
       .catch(() => {
         if (active && loadRequestId.current === requestId)
@@ -77,7 +84,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     return () => {
       active = false
     }
-  }, [trackId])
+  }, [refreshData, trackId])
 
   useEffect(() => {
     let active = true
@@ -157,6 +164,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     setSelectingCandidateId(candidate.id)
     try {
       setLyrics(await window.electronAPI.saveLyricsSelection(trackId, candidate))
+      void refreshData()
       setSavedSyncProfile(null)
       setDraftSyncProfile({ trackId, offsetMs: 0, anchors: [], updatedAt: 0 })
       setSearchResult(null)
@@ -246,7 +254,15 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       />
     )
   if (lyrics.kind === 'text')
-    return <div className="lyrics-text">{lyrics.content}</div>
+    return (
+      <div className="lyrics-text">
+        <LyricsAppliedInfo
+          lyrics={appliedLyrics}
+          syncProfile={activeSyncProfile}
+        />
+        {lyrics.content}
+      </div>
+    )
   return (
     <div
       className="lyrics-synced"
@@ -265,8 +281,12 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       >
         <Search />
       </button>
+      <LyricsAppliedInfo
+        lyrics={appliedLyrics}
+        syncProfile={activeSyncProfile}
+      />
       <div className="lyrics-sync-status">
-        {syncStatusCopy(savedSyncProfile)}
+        {syncStatusCopy(activeSyncProfile)}
         {(savedSyncProfile || syncEditing) && (
           <button type="button" onClick={() => void resetSync()}>
             초기화
@@ -349,6 +369,52 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
   )
 }
 
+function LyricsAppliedInfo({
+  lyrics,
+  syncProfile,
+}: {
+  lyrics?: TrackLyrics
+  syncProfile: LyricsSyncProfile | null
+}) {
+  const isVideoSubtitle = Boolean(
+    lyrics?.provider === 'lyrica' &&
+      lyrics.providerSource &&
+      ['youtube_transcript', 'youtube_captions', 'youtube_subtitles'].includes(
+        lyrics.providerSource,
+      ),
+  )
+  const source =
+    lyrics?.sourceLabel ??
+    (lyrics?.provider === 'lyrica' || lyrics?.source === 'lyrica'
+      ? 'Lyrica'
+      : lyrics?.source === 'lrclib'
+        ? 'LRCLIB'
+        : lyrics?.source === 'local-lrc'
+          ? '로컬 LRC'
+          : lyrics?.source === 'local-txt'
+            ? '로컬 텍스트'
+            : '사용자 가사')
+  const sync = isVideoSubtitle
+    ? '현재 영상 타임스탬프'
+    : lyrics?.syncedLyrics
+      ? '원곡 타임스탬프'
+      : '타임스탬프 없음'
+
+  return (
+    <div className="lyrics-applied-info" aria-label="현재 적용된 가사 정보">
+      <span>가사 출처: {source}</span>
+      <span>싱크: {sync}</span>
+      <span>사용자 보정: {syncCorrectionCopy(syncProfile)}</span>
+    </div>
+  )
+}
+
+function syncCorrectionCopy(profile: LyricsSyncProfile | null) {
+  if (!profile || (!profile.anchors.length && profile.offsetMs === 0)) return '없음'
+  const offset = `${profile.offsetMs >= 0 ? '+' : ''}${(profile.offsetMs / 1_000).toFixed(1)}초`
+  return `기준점 ${profile.anchors.length}개 · 오프셋 ${offset}`
+}
+
 function syncStatusCopy(profile: LyricsSyncProfile | null) {
   if (!profile) return '원본 싱크'
   if (profile.anchors.length >= 3)
@@ -397,7 +463,11 @@ function LyricsSearchPanel({
           </button>
         )}
       </div>
-      <p className="lyrics-search-status">{statusCopy[result.status]}</p>
+      <p className="lyrics-search-status">
+        {loading
+          ? 'LRCLIB 검색 중 · 결과가 부족하면 Lyrica 검색'
+          : statusCopy[result.status]}
+      </p>
       <div className="lyrics-search-fields">
         <label>
           제목
@@ -440,10 +510,14 @@ function LyricsSearchPanel({
       {result.candidates.length > 0 && (
         <div className="lyrics-candidate-list">
           {result.candidates.map((candidate) => (
-            <div className="lyrics-candidate" key={candidate.id}>
+            <div
+              className="lyrics-candidate"
+              key={`${candidate.provider ?? 'lrclib'}:${candidate.id}`}
+            >
               <div className="lyrics-candidate__content">
                 <strong>{candidate.trackName}</strong>
                 <span>{candidate.artistName}</span>
+                <small>{candidate.sourceLabel ?? 'LRCLIB'}</small>
                 <small>
                   {candidate.albumName || '앨범 정보 없음'} ·{' '}
                   {candidate.duration
