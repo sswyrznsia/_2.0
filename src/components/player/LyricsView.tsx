@@ -1,4 +1,4 @@
-import { FileText, Search, X } from 'lucide-react'
+import { FileText, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { usePlayerStore } from '../../stores/playerStore'
 import { useAppStore } from '../../stores/appStore'
@@ -14,6 +14,14 @@ import { formatTime } from '../../utils/format'
 import { parseLrc } from '../../utils/lyrics'
 import { adjustLyricTimeMs } from '../../utils/lyricsSync'
 import { EmptyState } from '../common/EmptyState'
+
+type LyricsSearchMode = 'all' | 'synced'
+type LyricsSearchProgress =
+  | 'preparing'
+  | 'lrclib'
+  | 'lyrica-connecting'
+  | 'lyrica-searching'
+  | 'organizing'
 
 const statusCopy: Record<LyricsLookupStatus, string> = {
   found: '가사를 찾았습니다.',
@@ -48,6 +56,10 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
   const [searchResult, setSearchResult] = useState<LyricsSearchResult | null>(
     null,
   )
+  const [searchMode, setSearchMode] = useState<LyricsSearchMode>('all')
+  const [searchProgress, setSearchProgress] =
+    useState<LyricsSearchProgress>('preparing')
+  const [searchElapsedMs, setSearchElapsedMs] = useState(0)
   const [searchTitle, setSearchTitle] = useState(currentTrack?.title ?? '')
   const [searchArtist, setSearchArtist] = useState(currentTrack?.artist ?? '')
   const [loading, setLoading] = useState(false)
@@ -65,6 +77,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
   const autoScrollPausedUntil = useRef(0)
   const loadRequestId = useRef(0)
   const selectingCandidateRef = useRef<number | null>(null)
+  const searchRequestId = useRef(0)
 
   useEffect(() => {
     const requestId = ++loadRequestId.current
@@ -126,7 +139,36 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       })
   }, [activeIndex])
 
-  const search = async (useCurrentMetadata = false) => {
+  useEffect(() => {
+    if (!loading) return
+    const startedAt = Date.now()
+    const updateElapsed = () => {
+      const elapsed = Date.now() - startedAt
+      setSearchElapsedMs(elapsed)
+      setSearchProgress(
+        elapsed < 500
+          ? 'preparing'
+          : elapsed < 2_500
+            ? 'lrclib'
+            : elapsed < 8_000
+              ? 'lyrica-connecting'
+              : 'lyrica-searching',
+      )
+    }
+    updateElapsed()
+    const timer = window.setInterval(updateElapsed, 100)
+    return () => window.clearInterval(timer)
+  }, [loading])
+
+  const search = async (
+    mode: LyricsSearchMode = 'all',
+    useCurrentMetadata = false,
+  ) => {
+    const requestId = ++searchRequestId.current
+    setSearchMode(mode)
+    setSearchProgress('preparing')
+    setSearchElapsedMs(0)
+    setSearchResult({ status: 'found', candidates: [], normalizedTitle: '' })
     setLoading(true)
     try {
       const result = await window.electronAPI.searchLyrics(
@@ -135,20 +177,30 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
           ? undefined
           : { title: searchTitle, artist: searchArtist },
       )
+      if (requestId !== searchRequestId.current) return
+      setSearchProgress('organizing')
       setSearchResult(result)
       if (useCurrentMetadata) {
         setSearchTitle(result.normalizedTitle || currentTrack?.title || '')
         setSearchArtist(result.originalArtist || currentTrack?.artist || '')
       }
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 120))
     } catch {
+      if (requestId !== searchRequestId.current) return
       setSearchResult({
         status: 'network-error',
         candidates: [],
         normalizedTitle: '',
       })
     } finally {
-      setLoading(false)
+      if (requestId === searchRequestId.current) setLoading(false)
     }
+  }
+
+  const cancelSearch = () => {
+    searchRequestId.current += 1
+    setLoading(false)
+    setSearchResult(null)
   }
 
   const select = async (candidate: LyricsCandidate) => {
@@ -160,6 +212,8 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       )
     )
       return
+    searchRequestId.current += 1
+    setLoading(false)
     selectingCandidateRef.current = candidate.id
     setSelectingCandidateId(candidate.id)
     try {
@@ -223,14 +277,18 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         loading={loading}
         searchTitle={searchTitle}
         searchArtist={searchArtist}
+        searchMode={searchMode}
+        searchProgress={searchProgress}
+        searchElapsedMs={searchElapsedMs}
         onSearchTitleChange={setSearchTitle}
         onSearchArtistChange={setSearchArtist}
-        onSearch={() => void search()}
-        onCleanSearch={() => void search(true)}
+        onSearch={() => void search(searchMode)}
+        onCleanSearch={() => void search(searchMode, true)}
         onSelect={(candidate) => void select(candidate)}
         selectingCandidateId={selectingCandidateId}
         onMarkInstrumental={() => void markInstrumental()}
-        onClose={() => setSearchResult(null)}
+        onClose={() => (loading ? cancelSearch() : setSearchResult(null))}
+        onCancel={cancelSearch}
       />
     )
   if (lyrics.kind === 'none' || (lyrics.kind === 'lrc' && !lines.length))
@@ -244,13 +302,17 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         loading={loading}
         searchTitle={searchTitle}
         searchArtist={searchArtist}
+        searchMode="all"
+        searchProgress={searchProgress}
+        searchElapsedMs={searchElapsedMs}
         onSearchTitleChange={setSearchTitle}
         onSearchArtistChange={setSearchArtist}
-        onSearch={() => void search()}
-        onCleanSearch={() => void search(true)}
+        onSearch={() => void search('all')}
+        onCleanSearch={() => void search('all', true)}
         onSelect={(candidate) => void select(candidate)}
         selectingCandidateId={selectingCandidateId}
         onMarkInstrumental={() => void markInstrumental()}
+        onCancel={cancelSearch}
       />
     )
   if (lyrics.kind === 'text')
@@ -260,7 +322,14 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
           lyrics={appliedLyrics}
           syncProfile={activeSyncProfile}
         />
-        {lyrics.content}
+        <LyricsSearchActions
+          onFindSynced={() => void search('synced', true)}
+          onChooseOther={() => void search('all', true)}
+        />
+        <p className="lyrics-sync-unavailable">
+          타임스탬프가 없어 현재 줄 강조를 사용할 수 없습니다.
+        </p>
+        <div className="lyrics-text__content">{lyrics.content}</div>
       </div>
     )
   return (
@@ -273,17 +342,13 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         autoScrollPausedUntil.current = Date.now() + 4_000
       }}
     >
-      <button
-        type="button"
-        className="lyrics-search-trigger"
-        onClick={() => void search(true)}
-        aria-label="가사 후보 검색"
-      >
-        <Search />
-      </button>
       <LyricsAppliedInfo
         lyrics={appliedLyrics}
         syncProfile={activeSyncProfile}
+      />
+      <LyricsSearchActions
+        onFindSynced={() => void search('synced', true)}
+        onChooseOther={() => void search('all', true)}
       />
       <div className="lyrics-sync-status">
         {syncStatusCopy(activeSyncProfile)}
@@ -369,6 +434,14 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
   )
 }
 
+const searchProgressCopy: Record<LyricsSearchProgress, string> = {
+  preparing: '검색 준비 중',
+  lrclib: 'LRCLIB 검색 중',
+  'lyrica-connecting': 'Lyrica 서버 연결 중',
+  'lyrica-searching': 'Lyrica 다중 소스 검색 중',
+  organizing: '후보 정리 중',
+}
+
 function LyricsAppliedInfo({
   lyrics,
   syncProfile,
@@ -424,11 +497,43 @@ function syncStatusCopy(profile: LyricsSyncProfile | null) {
   return `사용자 보정 ${profile.offsetMs >= 0 ? '+' : ''}${(profile.offsetMs / 1_000).toFixed(1)}초`
 }
 
+function LyricsSearchActions({
+  onFindSynced,
+  onChooseOther,
+}: {
+  onFindSynced: () => void
+  onChooseOther: () => void
+}) {
+  return (
+    <div className="lyrics-search-actions-inline">
+      <button
+        type="button"
+        className="button button--primary"
+        data-lyrics-search-mode="synced"
+        onClick={onFindSynced}
+      >
+        동기화 가사 찾기
+      </button>
+      <button
+        type="button"
+        className="button"
+        data-lyrics-search-mode="all"
+        onClick={onChooseOther}
+      >
+        다른 가사 선택
+      </button>
+    </div>
+  )
+}
+
 interface LyricsSearchPanelProps {
   result: LyricsSearchResult
   loading: boolean
   searchTitle: string
   searchArtist: string
+  searchMode: LyricsSearchMode
+  searchProgress: LyricsSearchProgress
+  searchElapsedMs: number
   onSearchTitleChange: (value: string) => void
   onSearchArtistChange: (value: string) => void
   onSearch: () => void
@@ -436,6 +541,7 @@ interface LyricsSearchPanelProps {
   onSelect: (candidate: LyricsCandidate) => void
   selectingCandidateId: number | null
   onMarkInstrumental: () => void
+  onCancel: () => void
   onClose?: () => void
 }
 
@@ -444,6 +550,9 @@ function LyricsSearchPanel({
   loading,
   searchTitle,
   searchArtist,
+  searchMode,
+  searchProgress,
+  searchElapsedMs,
   onSearchTitleChange,
   onSearchArtistChange,
   onSearch,
@@ -451,8 +560,30 @@ function LyricsSearchPanel({
   onSelect,
   selectingCandidateId,
   onMarkInstrumental,
+  onCancel,
   onClose,
 }: LyricsSearchPanelProps) {
+  const candidates =
+    searchMode === 'synced'
+      ? [...result.candidates].sort(
+          (left, right) =>
+            Number(Boolean(right.syncedLyrics)) -
+            Number(Boolean(left.syncedLyrics)),
+        )
+      : result.candidates
+  const hasSyncedCandidate = result.candidates.some(
+    (candidate) => Boolean(candidate.syncedLyrics),
+  )
+  const elapsedSeconds = Math.floor(searchElapsedMs / 1_000)
+  const timedOut = searchElapsedMs >= 45_000 && !candidates.length
+  const resultStatus = timedOut
+    ? '공개 가사 서버의 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.'
+    : result.status === 'not-found'
+      ? '가사 검색 결과가 없습니다.'
+      : result.status === 'network-error'
+        ? '가사 서버에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.'
+        : statusCopy[result.status]
+
   return (
     <div className="lyrics-search-panel">
       <div className="section-heading">
@@ -463,11 +594,31 @@ function LyricsSearchPanel({
           </button>
         )}
       </div>
-      <p className="lyrics-search-status">
-        {loading
-          ? 'LRCLIB 검색 중 · 결과가 부족하면 Lyrica 검색'
-          : statusCopy[result.status]}
-      </p>
+      {loading ? (
+        <div
+          className="lyrics-search-progress"
+          data-lyrics-search-progress={searchProgress}
+          aria-live="polite"
+        >
+          <strong>
+            {searchMode === 'synced' ? '동기화 가사 찾기' : '다른 가사 선택'}
+          </strong>
+          <span>
+            {searchProgressCopy[searchProgress]} · {elapsedSeconds}초 경과
+          </span>
+          <small>
+            공개 가사 서버를 깨우는 중입니다. 첫 검색은 최대 30초 정도 걸릴 수 있습니다.
+          </small>
+        </div>
+      ) : (
+        <p className="lyrics-search-status">
+          {searchMode === 'synced' &&
+          result.candidates.length > 0 &&
+          !hasSyncedCandidate
+            ? '동기화 가사를 찾지 못했습니다. 현재 일반 가사는 계속 사용할 수 있습니다.'
+            : resultStatus}
+        </p>
+      )}
       <div className="lyrics-search-fields">
         <label>
           제목
@@ -503,16 +654,32 @@ function LyricsSearchPanel({
         >
           현재 제목 정리해서 다시 검색
         </button>
-        <button type="button" className="button" onClick={onMarkInstrumental}>
+        <button
+          type="button"
+          className="button"
+          disabled={loading}
+          onClick={onMarkInstrumental}
+        >
           연주곡으로 표시
         </button>
+        {loading && (
+          <button
+            type="button"
+            className="button"
+            data-lyrics-search-cancel
+            onClick={onCancel}
+          >
+            취소
+          </button>
+        )}
       </div>
-      {result.candidates.length > 0 && (
+      {candidates.length > 0 && (
         <div className="lyrics-candidate-list">
-          {result.candidates.map((candidate) => (
+          {candidates.map((candidate) => (
             <div
               className="lyrics-candidate"
               key={`${candidate.provider ?? 'lrclib'}:${candidate.id}`}
+              data-lyrics-synced={candidate.syncedLyrics ? 'true' : 'false'}
             >
               <div className="lyrics-candidate__content">
                 <strong>{candidate.trackName}</strong>
@@ -529,7 +696,7 @@ function LyricsSearchPanel({
               <button
                 type="button"
                 className="button lyrics-candidate__action"
-                disabled={loading || selectingCandidateId !== null}
+                disabled={selectingCandidateId !== null}
                 onClick={() => onSelect(candidate)}
               >
                 선택

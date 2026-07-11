@@ -377,6 +377,13 @@ const server = createServer((request, response) => {
   if (request.url?.startsWith('/api/search')) {
     const query =
       new URL(request.url, 'http://127.0.0.1').searchParams.get('q') ?? ''
+    if (query.includes('Square Track')) {
+      setTimeout(() => {
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify(candidates))
+      }, 700)
+      return
+    }
     if (
       query.includes('Slow Track') ||
       query.includes('No Cover Track') ||
@@ -745,7 +752,9 @@ try {
   if (savedPiecewiseProfile?.anchors?.length !== 4)
     throw new Error('Four-anchor piecewise lyrics sync profile was not saved')
   await cdp.evaluate('window.confirm = () => true')
-  await cdp.evaluate('document.querySelector(".lyrics-search-trigger").click()')
+  await cdp.evaluate(
+    'document.querySelector("[data-lyrics-search-mode=\\"all\\"]").click()',
+  )
   await waitFor(
     () => cdp.evaluate('Boolean(document.querySelector(".lyrics-candidate"))'),
     'candidate selection after sync profile',
@@ -770,6 +779,169 @@ try {
     selectionScreenshot,
     Buffer.from(selectionCapture.data, 'base64'),
   )
+
+  await cdp.evaluate(`window.electronAPI.saveLyricsSelection('${trackCId}', {
+    id: 901,
+    trackName: 'Square Track',
+    artistName: 'Square Artist',
+    plainLyrics: 'Cached plain lyrics\\nSecond cached line',
+    instrumental: false,
+    provider: 'lrclib',
+    sourceLabel: 'LRCLIB',
+  })`)
+  await cdp.evaluate(`
+    [...document.querySelectorAll('.cover-item')]
+      .find((item) => item.querySelector('strong')?.textContent.includes('Square Track'))
+      ?.click()
+  `)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".now-panel__track strong")?.textContent.includes("Square Track")',
+      ),
+    'plain lyrics track',
+  )
+  await cdp.evaluate(
+    'window.dispatchEvent(new CustomEvent("pulse:panel-tab", { detail: "lyrics" }))',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".lyrics-text__content")?.textContent.includes("Cached plain lyrics")',
+      ),
+    'cached plain lyrics',
+  )
+  const plainLyricsState = await cdp.evaluate(`(() => ({
+    actions: document.querySelectorAll('.lyrics-text [data-lyrics-search-mode]').length,
+    hasActiveLine: Boolean(document.querySelector('.lyrics-text .is-active')),
+    warning: document.querySelector('.lyrics-sync-unavailable')?.textContent,
+  }))()`)
+  if (
+    plainLyricsState.actions !== 2 ||
+    plainLyricsState.hasActiveLine ||
+    !plainLyricsState.warning?.includes('타임스탬프')
+  )
+    throw new Error(
+      `Plain lyrics actions or timestamp warning are missing: ${JSON.stringify(plainLyricsState)}`,
+    )
+  await cdp.evaluate(
+    'document.querySelector("[data-lyrics-search-mode=\\"synced\\"]").click()',
+  )
+  const initialSearchFeedback = await cdp.evaluate(`(() => ({
+    progress: document.querySelector('[data-lyrics-search-progress]')?.getAttribute('data-lyrics-search-progress'),
+    elapsed: document.querySelector('[data-lyrics-search-progress]')?.textContent,
+    cancelVisible: Boolean(document.querySelector('[data-lyrics-search-cancel]')),
+    searchButtonsDisabled: [...document.querySelectorAll('.lyrics-search-actions button')]
+      .filter((button) => !button.hasAttribute('data-lyrics-search-cancel'))
+      .every((button) => button.disabled),
+  }))()`)
+  if (
+    !initialSearchFeedback.progress ||
+    !initialSearchFeedback.elapsed?.includes('초 경과') ||
+    !initialSearchFeedback.cancelVisible ||
+    !initialSearchFeedback.searchButtonsDisabled
+  )
+    throw new Error(
+      `Immediate lyrics search feedback is incomplete: ${JSON.stringify(initialSearchFeedback)}`,
+    )
+  await cdp.evaluate('document.querySelector("[data-lyrics-search-cancel]").click()')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".lyrics-text__content")?.textContent.includes("Cached plain lyrics")',
+      ),
+    'plain lyrics after cancelling an in-flight search',
+  )
+  await delay(850)
+  const lyricsAfterCancelledSearch = await cdp.evaluate(
+    'document.querySelector(".lyrics-text__content")?.textContent',
+  )
+  if (!lyricsAfterCancelledSearch?.includes('Cached plain lyrics'))
+    throw new Error('Cancelled lyrics search replaced the existing lyrics')
+  await cdp.evaluate(
+    'document.querySelector("[data-lyrics-search-mode=\\"synced\\"]").click()',
+  )
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-candidate"))'),
+    'synced lyrics search candidates',
+  )
+  const syncedFirstCandidate = await cdp.evaluate(
+    'document.querySelector(".lyrics-candidate")?.getAttribute("data-lyrics-synced")',
+  )
+  if (syncedFirstCandidate !== 'true')
+    throw new Error(
+      `Synced lyrics search did not prioritize timed candidates: ${syncedFirstCandidate}`,
+    )
+  await cdp.evaluate(
+    'document.querySelector(".lyrics-search-panel .section-heading button").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".lyrics-text__content")?.textContent.includes("Cached plain lyrics")',
+      ),
+    'plain lyrics after search cancellation',
+  )
+  await cdp.evaluate(
+    'document.querySelector("[data-lyrics-search-mode=\\"synced\\"]").click()',
+  )
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-candidate"))'),
+    'timed lyrics candidates after search cancellation',
+  )
+  await cdp.evaluate(
+    `[...document.querySelectorAll('.lyrics-candidate')]
+      .find((row) => row.querySelector('strong')?.textContent === 'Candidate Song')
+      ?.querySelector('.lyrics-candidate__action')?.click()`,
+  )
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-synced .is-active"))'),
+    'active line after timed lyrics selection',
+  )
+  await cdp.evaluate(`
+    [...document.querySelectorAll('.cover-item')]
+      .find((item) => item.querySelector('strong')?.textContent.includes('Candidate Song'))
+      ?.click()
+  `)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".now-panel__track strong")?.textContent.includes("Candidate Song")',
+      ),
+    'track switch after timed lyrics selection',
+  )
+  await cdp.evaluate(`
+    [...document.querySelectorAll('.cover-item')]
+      .find((item) => item.querySelector('strong')?.textContent.includes('Square Track'))
+      ?.click()
+  `)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".now-panel__track strong")?.textContent.includes("Square Track")',
+      ),
+    'plain lyrics track after switching back',
+  )
+  await cdp.evaluate(
+    'window.dispatchEvent(new CustomEvent("pulse:panel-tab", { detail: "lyrics" }))',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `window.electronAPI.loadLyrics('${trackCId}').then((lyrics) =>
+          lyrics.kind === 'lrc' && lyrics.content.includes('Candidate lyrics'))`,
+      ),
+    'saved timed lyrics after track switch',
+  )
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-synced"))'),
+    'timed lyrics UI after track switch',
+  )
+  await cdp.evaluate(`
+    [...document.querySelectorAll('.cover-item')]
+      .find((item) => item.querySelector('strong')?.textContent.includes('Candidate Song'))
+      ?.click()
+  `)
 
   const savedAfterSelection = JSON.parse(
     await readFile(path.join(userData, 'pulse-shelf-data.json'), 'utf8'),
@@ -913,6 +1085,30 @@ try {
     throw new Error(
       `Lyrics sync profile did not persist after restart: ${JSON.stringify(persistedSyncProfile)}`,
     )
+  await cdp.evaluate(`
+    [...document.querySelectorAll('.cover-item')]
+      .find((item) => item.querySelector('strong')?.textContent.includes('Square Track'))
+      ?.click()
+  `)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".lyrics-synced")?.textContent.includes("Candidate lyrics")',
+      ),
+    'timed lyrics after app restart',
+  )
+  await cdp.evaluate(`
+    [...document.querySelectorAll('.cover-item')]
+      .find((item) => item.querySelector('strong')?.textContent.includes('Candidate Song'))
+      ?.click()
+  `)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".lyrics-synced")?.textContent.includes("Candidate lyrics")',
+      ),
+    'track A after plain lyrics persistence check',
+  )
   await cdp.evaluate('document.querySelector(".lyrics-sync-status button").click()')
   await waitFor(
     () =>
