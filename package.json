@@ -1,0 +1,113 @@
+{
+  "name": "pulse-shelf-2",
+  "private": true,
+  "version": "2.0.0",
+  "description": "A local-first desktop music player",
+  "author": "Pulse Shelf",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "electron:dev": "vite",
+    "typecheck": "tsc -b",
+    "generate:icons": "node scripts/generate-icons.mjs",
+    "build": "npm run generate:icons && tsc -b && vite build",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:media": "node scripts/run-self-test.mjs",
+    "test:lyrics": "node scripts/run-lyrics-test.mjs && node scripts/run-lyrics-ui-test.mjs",
+    "test:ui": "npm run build && node scripts/run-ui-test.mjs",
+    "test:taskbar": "npm run build && node scripts/run-taskbar-geometry-test.mjs && node scripts/run-taskbar-ui-test.mjs",
+    "test:taskbar:capture": "npm run build && node scripts/run-taskbar-capture-test.mjs",
+    "test:youtube-extension": "node scripts/run-youtube-extension-test.mjs",
+    "preview": "vite preview",
+    "dist": "npm run build && electron-builder --win nsis portable"
+  },
+  "dependencies": {
+    "discord-rpc": "^4.0.1",
+    "electron-log": "^5.4.4",
+    "electron-store": "^11.0.2",
+    "lucide-react": "^0.468.0",
+    "music-metadata": "^11.13.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/discord-rpc": "^4.0.11",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
+    "eslint": "^10.6.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "png-to-ico": "^3.0.2",
+    "prettier": "^3.9.5",
+    "sharp": "^0.35.3",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.63.0",
+    "vite": "^8.1.1",
+    "vite-plugin-electron": "^1.1.0"
+  },
+  "main": "dist-electron/main.js",
+  "build": {
+    "appId": "com.pulseshelf.player",
+    "productName": "Pulse Shelf 2.0",
+    "asar": true,
+    "directories": {
+      "output": "release-2.0"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/icon.png",
+        "to": "assets/icon.png"
+      },
+      {
+        "from": "resources/extensions",
+        "to": "extensions"
+      },
+      {
+        "from": "resources/bin/win32-x64",
+        "to": "bin/win32-x64",
+        "filter": [
+          "yt-dlp.exe",
+          "yt-dlp-LICENSE.txt"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

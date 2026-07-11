@@ -1,0 +1,821 @@
+[
+  {
+    "taskbarScreenshot": "C:\\_2.0\\pulse-shelf-2\\artifacts\\home-layout\\taskbar-player-expanded.png",
+    "collapsedScreenshot": "C:\\_2.0\\pulse-shelf-2\\artifacts\\home-layout\\taskbar-player-collapsed.png",
+    "initialTaskbar": {
+      "width": 380,
+      "height": 44,
+      "x": 787,
+      "y": 818,
+      "availLeft": 0,
+      "availTop": 0,
+      "availWidth": 1536,
+      "availHeight": 816,
+      "screenWidth": 1536,
+      "screenHeight": 864,
+      "title": "Layout Test Track",
+      "controls": 3,
+      "hasProgress": true,
+      "state": {
+        "collapsed": false,
+        "visible": true,
+        "enabled": true,
+        "fullscreenSuppressed": false,
+        "registeredShortcutCount": 3
+      }
+    },
+    "taskbarPositions": [
+      {
+        "position": "left",
+        "x": 577
+      },
+      {
+        "position": "custom",
+        "x": 649
+      },
+      {
+        "position": "right",
+        "x": 787
+      }
+    ]
+  },
+  {
+    "target": {
+      "width": 1280,
+      "height": 720,
+      "cardMin": 140,
+      "cardMax": 160
+    },
+    "measurement": {
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "scroll": {
+        "document": {
+          "clientHeight": 720,
+          "scrollHeight": 720
+        },
+        "home": {
+          "clientHeight": 612,
+          "scrollHeight": 612
+        },
+        "main": {
+          "clientHeight": 612,
+          "scrollHeight": 612
+        }
+      },
+      "elements": {
+        "home": {
+          "selector": ".home-page",
+          "className": "page home-page",
+          "rect": {
+            "width": 1204,
+            "height": 612,
+            "top": 0,
+            "right": 1280,
+            "bottom": 612,
+            "left": 76
+          },
+          "style": {
+            "display": "grid",
+            "gridTemplateColumns": "737.112px 346.888px",
+            "flex": "0 1 auto",
+            "width": "1204px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "612px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "layout": {
+          "selector": ".home-page",
+          "className": "page home-page",
+          "rect": {
+            "width": 1204,
+            "height": 612,
+            "top": 0,
+            "right": 1280,
+            "bottom": 612,
+            "left": 76
+          },
+          "style": {
+            "display": "grid",
+            "gridTemplateColumns": "737.112px 346.888px",
+            "flex": "0 1 auto",
+            "width": "1204px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "612px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "recent": {
+          "selector": ".home-recent",
+          "className": "content-section home-recent",
+          "rect": {
+            "width": 737.1124877929688,
+            "height": 566,
+            "top": 22,
+            "right": 841.1124877929688,
+            "bottom": 588,
+            "left": 104
+          },
+          "style": {
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "737.112px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "566px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "grid": {
+          "selector": ".cover-grid",
+          "className": "cover-grid",
+          "rect": {
+            "width": 737.1124877929688,
+            "height": 216,
+            "top": 67.20000457763672,
+            "right": 841.1124877929688,
+            "bottom": 283.2000045776367,
+            "left": 104
+          },
+          "style": {
+            "display": "grid",
+            "gridTemplateColumns": "160px 160px 160px 160px",
+            "flex": "0 1 auto",
+            "width": "737.112px",
+            "maxWidth": "none",
+            "minWidth": "auto",
+            "height": "216px",
+            "maxHeight": "none",
+            "minHeight": "auto",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "card": {
+          "selector": ".cover-grid .cover-item-wrap",
+          "className": "cover-item-wrap is-current",
+          "rect": {
+            "width": 160,
+            "height": 216,
+            "top": 67.20000457763672,
+            "right": 264,
+            "bottom": 283.2000045776367,
+            "left": 104
+          },
+          "style": {
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "160px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "216px",
+            "maxHeight": "none",
+            "minHeight": "auto",
+            "overflow": "visible",
+            "position": "relative"
+          }
+        },
+        "cover": {
+          "selector": ".cover-grid .cover-item .album-cover",
+          "className": "album-cover album-cover--empty ",
+          "rect": {
+            "width": 160,
+            "height": 160,
+            "top": 67.20000457763672,
+            "right": 264,
+            "bottom": 227.20000457763672,
+            "left": 104
+          },
+          "style": {
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "160px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "160px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "title": {
+          "selector": ".cover-grid .cover-item strong",
+          "className": "",
+          "rect": {
+            "width": 160,
+            "height": 20,
+            "top": 235.1999969482422,
+            "right": 264,
+            "bottom": 255.1999969482422,
+            "left": 104
+          },
+          "style": {
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "160px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "20px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "hidden",
+            "position": "static"
+          }
+        },
+        "artist": {
+          "selector": ".cover-grid .cover-item > span[title]",
+          "className": "",
+          "rect": {
+            "width": 160,
+            "height": 19.200000762939453,
+            "top": 259.20001220703125,
+            "right": 264,
+            "bottom": 278.4000129699707,
+            "left": 104
+          },
+          "style": {
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "160px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "19.2px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "hidden",
+            "position": "static"
+          }
+        },
+        "playlist": {
+          "selector": ".home-playlists",
+          "className": "content-section home-playlists",
+          "rect": {
+            "width": 346.88751220703125,
+            "height": 566,
+            "top": 22,
+            "right": 1204,
+            "bottom": 588,
+            "left": 857.1124877929688
+          },
+          "style": {
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "346.888px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "566px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "empty": {
+          "selector": ".home-playlists .empty-state",
+          "className": "empty-state",
+          "rect": {
+            "width": 346.88751220703125,
+            "height": 520.7999877929688,
+            "top": 67.20000457763672,
+            "right": 1204,
+            "bottom": 587.9999923706055,
+            "left": 857.1124877929688
+          },
+          "style": {
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "flex": "1 1 0%",
+            "width": "346.888px",
+            "maxWidth": "none",
+            "minWidth": "auto",
+            "height": "520.8px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "panelTrigger": {
+          "selector": ".open-now-panel",
+          "className": "icon-button  open-now-panel",
+          "rect": {
+            "width": 34,
+            "height": 34,
+            "top": 18,
+            "right": 1262,
+            "bottom": 52,
+            "left": 1228
+          },
+          "style": {
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "34px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "34px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "sticky"
+          }
+        },
+        "playlistAll": {
+          "selector": ".home-playlists .section-heading > button",
+          "className": "",
+          "rect": {
+            "width": 63.36249923706055,
+            "height": 33.20000076293945,
+            "top": 22,
+            "right": 1204.000072479248,
+            "bottom": 55.20000076293945,
+            "left": 1140.6375732421875
+          },
+          "style": {
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "63.3625px",
+            "maxWidth": "none",
+            "minWidth": "auto",
+            "height": "33.2px",
+            "maxHeight": "none",
+            "minHeight": "auto",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "main": {
+          "selector": ".main-content",
+          "className": "main-content main-content--with-panel-trigger",
+          "rect": {
+            "width": 1204,
+            "height": 612,
+            "top": 0,
+            "right": 1280,
+            "bottom": 612,
+            "left": 76
+          },
+          "style": {
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "1204px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "612px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "auto",
+            "position": "relative"
+          }
+        },
+        "player": {
+          "selector": ".player-bar",
+          "className": "player-bar",
+          "rect": {
+            "width": 1280,
+            "height": 108,
+            "top": 612,
+            "right": 1280,
+            "bottom": 720,
+            "left": 0
+          },
+          "style": {
+            "display": "grid",
+            "gridTemplateColumns": "346.5px 539px 346.5px",
+            "flex": "0 1 auto",
+            "width": "1280px",
+            "maxWidth": "none",
+            "minWidth": "auto",
+            "height": "108px",
+            "maxHeight": "none",
+            "minHeight": "auto",
+            "overflow": "visible",
+            "position": "static"
+          }
+        }
+      },
+      "visible": {
+        "empty": true,
+        "playlist": true,
+        "card": true
+      }
+    },
+    "screenshot": "C:\\_2.0\\pulse-shelf-2\\artifacts\\home-layout\\home-dev-1280x720.png"
+  },
+  {
+    "target": {
+      "width": 1600,
+      "height": 900,
+      "cardMin": 160,
+      "cardMax": 180
+    },
+    "measurement": {
+      "viewport": {
+        "width": 1600,
+        "height": 900
+      },
+      "scroll": {
+        "document": {
+          "clientHeight": 900,
+          "scrollHeight": 900
+        },
+        "home": {
+          "clientHeight": 792,
+          "scrollHeight": 792
+        },
+        "main": {
+          "clientHeight": 792,
+          "scrollHeight": 792
+        }
+      },
+      "elements": {
+        "home": {
+          "selector": ".home-page",
+          "className": "page home-page",
+          "rect": {
+            "width": 1380,
+            "height": 792,
+            "top": 0,
+            "right": 1600,
+            "bottom": 792,
+            "left": 220
+          },
+          "style": {
+            "display": "grid",
+            "gridTemplateColumns": "840.475px 395.513px",
+            "flex": "0 1 auto",
+            "width": "1380px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "792px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "layout": {
+          "selector": ".home-page",
+          "className": "page home-page",
+          "rect": {
+            "width": 1380,
+            "height": 792,
+            "top": 0,
+            "right": 1600,
+            "bottom": 792,
+            "left": 220
+          },
+          "style": {
+            "display": "grid",
+            "gridTemplateColumns": "840.475px 395.513px",
+            "flex": "0 1 auto",
+            "width": "1380px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "792px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "recent": {
+          "selector": ".home-recent",
+          "className": "content-section home-recent",
+          "rect": {
+            "width": 840.4750366210938,
+            "height": 734,
+            "top": 30,
+            "right": 1094.4750366210938,
+            "bottom": 764,
+            "left": 254
+          },
+          "style": {
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "840.475px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "734px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "grid": {
+          "selector": ".cover-grid",
+          "className": "cover-grid",
+          "rect": {
+            "width": 840.4750366210938,
+            "height": 236,
+            "top": 75.20000457763672,
+            "right": 1094.4750366210938,
+            "bottom": 311.2000045776367,
+            "left": 254
+          },
+          "style": {
+            "display": "grid",
+            "gridTemplateColumns": "180px 180px 180px 180px",
+            "flex": "0 1 auto",
+            "width": "840.475px",
+            "maxWidth": "none",
+            "minWidth": "auto",
+            "height": "236px",
+            "maxHeight": "none",
+            "minHeight": "auto",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "card": {
+          "selector": ".cover-grid .cover-item-wrap",
+          "className": "cover-item-wrap is-current",
+          "rect": {
+            "width": 180,
+            "height": 236,
+            "top": 75.20000457763672,
+            "right": 434,
+            "bottom": 311.2000045776367,
+            "left": 254
+          },
+          "style": {
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "180px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "236px",
+            "maxHeight": "none",
+            "minHeight": "auto",
+            "overflow": "visible",
+            "position": "relative"
+          }
+        },
+        "cover": {
+          "selector": ".cover-grid .cover-item .album-cover",
+          "className": "album-cover album-cover--empty ",
+          "rect": {
+            "width": 180,
+            "height": 180,
+            "top": 75.20000457763672,
+            "right": 434,
+            "bottom": 255.20000457763672,
+            "left": 254
+          },
+          "style": {
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "180px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "180px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "title": {
+          "selector": ".cover-grid .cover-item strong",
+          "className": "",
+          "rect": {
+            "width": 180,
+            "height": 20,
+            "top": 263.20001220703125,
+            "right": 434,
+            "bottom": 283.20001220703125,
+            "left": 254
+          },
+          "style": {
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "180px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "20px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "hidden",
+            "position": "static"
+          }
+        },
+        "artist": {
+          "selector": ".cover-grid .cover-item > span[title]",
+          "className": "",
+          "rect": {
+            "width": 180,
+            "height": 19.200000762939453,
+            "top": 287.20001220703125,
+            "right": 434,
+            "bottom": 306.4000129699707,
+            "left": 254
+          },
+          "style": {
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "180px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "19.2px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "hidden",
+            "position": "static"
+          }
+        },
+        "playlist": {
+          "selector": ".home-playlists",
+          "className": "content-section home-playlists",
+          "rect": {
+            "width": 395.51251220703125,
+            "height": 734,
+            "top": 30,
+            "right": 1513.9874877929688,
+            "bottom": 764,
+            "left": 1118.4749755859375
+          },
+          "style": {
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "395.513px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "734px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "empty": {
+          "selector": ".home-playlists .empty-state",
+          "className": "empty-state",
+          "rect": {
+            "width": 395.51251220703125,
+            "height": 688.7999877929688,
+            "top": 75.20000457763672,
+            "right": 1513.9874877929688,
+            "bottom": 763.9999923706055,
+            "left": 1118.4749755859375
+          },
+          "style": {
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "flex": "1 1 0%",
+            "width": "395.513px",
+            "maxWidth": "none",
+            "minWidth": "auto",
+            "height": "688.8px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "panelTrigger": {
+          "selector": ".open-now-panel",
+          "className": "icon-button  open-now-panel",
+          "rect": {
+            "width": 34,
+            "height": 34,
+            "top": 18,
+            "right": 1582,
+            "bottom": 52,
+            "left": 1548
+          },
+          "style": {
+            "display": "flex",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "34px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "34px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "visible",
+            "position": "sticky"
+          }
+        },
+        "playlistAll": {
+          "selector": ".home-playlists .section-heading > button",
+          "className": "",
+          "rect": {
+            "width": 63.36249923706055,
+            "height": 33.20000076293945,
+            "top": 30,
+            "right": 1513.9874992370605,
+            "bottom": 63.20000076293945,
+            "left": 1450.625
+          },
+          "style": {
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "63.3625px",
+            "maxWidth": "none",
+            "minWidth": "auto",
+            "height": "33.2px",
+            "maxHeight": "none",
+            "minHeight": "auto",
+            "overflow": "visible",
+            "position": "static"
+          }
+        },
+        "main": {
+          "selector": ".main-content",
+          "className": "main-content main-content--with-panel-trigger",
+          "rect": {
+            "width": 1380,
+            "height": 792,
+            "top": 0,
+            "right": 1600,
+            "bottom": 792,
+            "left": 220
+          },
+          "style": {
+            "display": "block",
+            "gridTemplateColumns": "none",
+            "flex": "0 1 auto",
+            "width": "1380px",
+            "maxWidth": "none",
+            "minWidth": "0px",
+            "height": "792px",
+            "maxHeight": "none",
+            "minHeight": "0px",
+            "overflow": "auto",
+            "position": "relative"
+          }
+        },
+        "player": {
+          "selector": ".player-bar",
+          "className": "player-bar",
+          "rect": {
+            "width": 1600,
+            "height": 108,
+            "top": 792,
+            "right": 1600,
+            "bottom": 900,
+            "left": 0
+          },
+          "style": {
+            "display": "grid",
+            "gridTemplateColumns": "433.138px 649.713px 433.15px",
+            "flex": "0 1 auto",
+            "width": "1600px",
+            "maxWidth": "none",
+            "minWidth": "auto",
+            "height": "108px",
+            "maxHeight": "none",
+            "minHeight": "auto",
+            "overflow": "visible",
+            "position": "static"
+          }
+        }
+      },
+      "visible": {
+        "empty": true,
+        "playlist": true,
+        "card": true
+      }
+    },
+    "screenshot": "C:\\_2.0\\pulse-shelf-2\\artifacts\\home-layout\\home-dev-1600x900.png"
+  },
+  {
+    "libraryRemovalScreenshot": "C:\\_2.0\\pulse-shelf-2\\artifacts\\home-layout\\library-trash-confirmation.png"
+  },
+  {
+    "taskbarRestartCollapsed": true,
+    "trayPersistence": true
+  }
+]
