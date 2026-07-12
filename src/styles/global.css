@@ -1337,6 +1337,42 @@ svg {
   font-size: 13px;
   line-height: 1.5;
 }
+.lyrics-provider-status {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.lyrics-provider-status > strong {
+  color: var(--text);
+}
+.lyrics-provider-status ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lyrics-provider-status li {
+  display: grid;
+  grid-template-columns: 14px auto minmax(0, 1fr);
+  gap: 5px;
+  align-items: baseline;
+}
+.lyrics-provider-status li > span {
+  color: var(--accent-strong);
+}
+.lyrics-provider-status li > small {
+  overflow-wrap: anywhere;
+}
+.lyrics-provider-status p {
+  margin: 0;
+}
 .lyrics-search-progress {
   display: grid;
   gap: 3px;
@@ -1389,6 +1425,31 @@ svg {
 .lyrics-search-actions .button {
   min-height: 34px;
   font-size: 12px;
+}
+.manual-lyrics-input {
+  display: grid;
+  width: min(560px, 100%);
+  gap: 10px;
+}
+.manual-lyrics-input p {
+  margin: 0;
+}
+.manual-lyrics-input textarea {
+  min-height: 220px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  outline: 0;
+  color: var(--text);
+  background: var(--surface);
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.manual-lyrics-input textarea:focus {
+  border-color: var(--accent);
+}
+.manual-lyrics-input__error {
+  color: #dba4af !important;
 }
 .lyrics-candidate-list {
   display: grid;

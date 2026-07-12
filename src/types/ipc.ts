@@ -48,6 +48,8 @@ export const IPC = {
   loadLyrics: 'library:load-lyrics',
   lyricsSearch: 'lyrics:search',
   lyricsSaveSelection: 'lyrics:save-selection',
+  lyricsImportFile: 'lyrics:import-file',
+  lyricsParseInput: 'lyrics:parse-input',
   lyricsRemove: 'lyrics:remove',
   lyricsMarkInstrumental: 'lyrics:mark-instrumental',
   lyricsClearCache: 'lyrics:clear-cache',
@@ -139,6 +141,8 @@ export interface ElectronApi {
     trackId: string,
     candidate: LyricsCandidate,
   ) => Promise<LyricsResult>
+  importLyricsFile: (trackId: string) => Promise<LyricsCandidate | null>
+  parseLyricsInput: (trackId: string, content: string) => Promise<LyricsCandidate>
   removeLyrics: (trackId: string) => Promise<void>
   markLyricsInstrumental: (trackId: string) => Promise<void>
   clearLyricsCache: () => Promise<void>

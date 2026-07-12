@@ -70,6 +70,7 @@ import {
   getGeneratedLyricsTimelineState,
   saveGeneratedLyricsTimeline,
   clearGeneratedLyricsTimeline,
+  createManualLyricsCandidate,
   saveLyricsSelection,
   searchTrackLyrics,
 } from './ipc/lyrics'
@@ -1380,6 +1381,27 @@ function registerIpc() {
     provider: z.enum(['lrclib', 'lyrica']).optional(),
     providerSource: z.string().trim().min(1).max(60).optional(),
     sourceLabel: z.string().trim().min(1).max(100).optional(),
+    alternateSourceLabels: z
+      .array(z.string().trim().min(1).max(100))
+      .max(10)
+      .optional(),
+    language: z.string().trim().min(1).max(100).optional(),
+    providerMetadata: z
+      .record(
+        z.string().max(100),
+        z.union([
+          z.string().max(2_000),
+          z.number().finite(),
+          z.boolean(),
+          z.null(),
+        ]),
+      )
+      .optional(),
+    timestampValid: z.boolean().optional(),
+    validLrcLineCount: z.number().int().nonnegative().optional(),
+    source: z
+      .enum(['imported-lrc', 'imported-text', 'manual-input'])
+      .optional(),
   })
   const lyricsSearchQuerySchema = z.object({
     title: z.string().trim().max(500).optional(),
@@ -1392,6 +1414,47 @@ function registerIpc() {
       return searchTrackLyrics(
         trackIdSchema.parse(trackId),
         query === undefined ? undefined : lyricsSearchQuerySchema.parse(query),
+      )
+    },
+  )
+  ipcMain.handle(IPC.lyricsImportFile, async (event, trackId: unknown) => {
+    assertTrustedSender(event)
+    const id = trackIdSchema.parse(trackId)
+    if (!mainWindow) throw new Error('Main window is unavailable')
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '가사 파일 가져오기',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Lyrics files', extensions: ['lrc', 'txt'] },
+        { name: 'LRC files', extensions: ['lrc'] },
+        { name: 'Text files', extensions: ['txt'] },
+      ],
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    const selectedPath = result.filePaths[0]
+    const extension = path.extname(selectedPath).toLocaleLowerCase()
+    if (extension !== '.lrc' && extension !== '.txt')
+      throw new Error('LRC 또는 TXT 파일만 가져올 수 있습니다.')
+    const fileStats = await stat(selectedPath)
+    if (!fileStats.isFile() || fileStats.size > 2 * 1024 * 1024)
+      throw new Error('가사 파일은 2MB 이하의 일반 파일이어야 합니다.')
+    const content = await readFile(selectedPath, 'utf8')
+    if (content.includes('\uFFFD'))
+      throw new Error('UTF-8로 읽을 수 없는 가사 파일입니다.')
+    return createManualLyricsCandidate(
+      id,
+      content,
+      extension === '.lrc' ? 'imported-lrc' : 'imported-text',
+    )
+  })
+  ipcMain.handle(
+    IPC.lyricsParseInput,
+    (event, trackId: unknown, content: unknown) => {
+      assertTrustedSender(event)
+      return createManualLyricsCandidate(
+        trackIdSchema.parse(trackId),
+        z.string().trim().min(1).max(2_000_000).parse(content),
+        'manual-input',
       )
     },
   )

@@ -16,6 +16,7 @@ import {
   validateGeneratedLyricsTimeline,
 } from '../src/utils/generatedLyricsTimeline'
 import { findActiveLyricLineIndex } from '../src/utils/lyrics'
+import { parseManualLyrics } from '../src/utils/manualLyrics'
 
 const track = (overrides: Partial<Track> = {}): Track => ({
   id: 'a'.repeat(64),
@@ -51,6 +52,8 @@ async function withFetch(
   callback: () => Promise<void>,
 ) {
   const original = globalThis.fetch
+  const originalLyricaApi = process.env.LYRICA_API_BASE_URL
+  delete process.env.LYRICA_API_BASE_URL
   globalThis.fetch = (async () => {
     if (response instanceof Error) throw response
     if (typeof response === 'number')
@@ -62,6 +65,8 @@ async function withFetch(
     await callback()
   } finally {
     globalThis.fetch = original
+    if (originalLyricaApi === undefined) delete process.env.LYRICA_API_BASE_URL
+    else process.env.LYRICA_API_BASE_URL = originalLyricaApi
   }
 }
 
@@ -71,24 +76,49 @@ async function withProviderFetch(
     lyricaSynced?: unknown
     lyricaPlain?: unknown
     lyricaStatus?: number
+    lyricaInvalidJson?: boolean
+    lyricaHang?: boolean
+    lyricaResolver?: (url: URL) => unknown
   },
   callback: (calls: { lrclib: number; lyrica: number }) => Promise<void>,
 ) {
   const original = globalThis.fetch
+  const originalLyricaApi = process.env.LYRICA_API_BASE_URL
+  process.env.LYRICA_API_BASE_URL = 'https://lyrica.test'
   const calls = { lrclib: 0, lyrica: 0 }
-  globalThis.fetch = (async (input) => {
+  globalThis.fetch = (async (input, init) => {
     const url = new URL(String(input))
     if (url.hostname === 'lrclib.net' || url.pathname.includes('/api/search')) {
       calls.lrclib += 1
       return new Response(JSON.stringify(responses.lrclib), { status: 200 })
     }
     calls.lyrica += 1
+    assert.equal(url.pathname, '/lyrics/')
+    assert.equal(url.searchParams.get('timestamps'), 'true')
+    assert.equal(url.searchParams.get('fast'), 'true')
+    if (responses.lyricaHang)
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal
+        const keepAlive = setTimeout(
+          () => reject(new Error('timeout test stalled')),
+          1_000,
+        )
+        signal?.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(keepAlive)
+            reject(signal.reason)
+          },
+          { once: true },
+        )
+      })
     if (responses.lyricaStatus)
       return new Response('', { status: responses.lyricaStatus })
-    const payload =
-      url.searchParams.get('timestamps') === 'true'
-        ? responses.lyricaSynced
-        : responses.lyricaPlain
+    if (responses.lyricaInvalidJson)
+      return new Response('{broken', { status: 200 })
+    const payload = responses.lyricaResolver
+      ? responses.lyricaResolver(url)
+      : (responses.lyricaSynced ?? responses.lyricaPlain)
     return new Response(JSON.stringify(payload), { status: 200 })
   }) as typeof fetch
   try {
@@ -96,6 +126,8 @@ async function withProviderFetch(
     await callback(calls)
   } finally {
     globalThis.fetch = original
+    if (originalLyricaApi === undefined) delete process.env.LYRICA_API_BASE_URL
+    else process.env.LYRICA_API_BASE_URL = originalLyricaApi
   }
 }
 
@@ -114,6 +146,23 @@ const lyricaPayload = (overrides: Record<string, unknown> = {}) => ({
     ...overrides,
   },
 })
+
+assert.deepEqual(
+  parseManualLyrics(
+    '\uFEFF[00:12.34]첫 줄\n[00:15.200][00:16.300]둘째 줄\n\n[00:20.000]\n셋째 줄',
+  ),
+  {
+    kind: 'lrc',
+    syncedLyrics:
+      '[00:12.340]첫 줄\n[00:15.200]둘째 줄\n[00:16.300]둘째 줄\n[00:20.000]셋째 줄',
+    plainLyrics: '첫 줄\n둘째 줄\n셋째 줄',
+  },
+)
+assert.deepEqual(parseManualLyrics('\n일반 가사\n\n둘째 줄\n'), {
+  kind: 'text',
+  plainLyrics: '일반 가사\n둘째 줄',
+})
+assert.throws(() => parseManualLyrics('[00:10.000]\n\n'))
 
 assert.equal(
   normalizeLyricsTitle('【Official MV】Song Title (Lyrics Video) 🎵'),
@@ -139,7 +188,11 @@ await withProviderFetch(
   async (calls) => {
     const result = await new LyricsService().lookup(track())
     assert.equal(result.autoMatch?.provider, 'lrclib')
-    assert.equal(calls.lyrica, 0)
+    assert.equal(calls.lyrica, 1)
+    assert.deepEqual(result.providerAttempts, [
+      { provider: 'lyrica', status: 'success' },
+      { provider: 'lrclib', status: 'success' },
+    ])
   },
 )
 
@@ -161,8 +214,7 @@ await withProviderFetch(
 await withProviderFetch(
   {
     lrclib: [],
-    lyricaSynced: { status: 'error', error: { message: 'not found' } },
-    lyricaPlain: lyricaPayload({
+    lyricaSynced: lyricaPayload({
       source: 'netease',
       timed_lyrics: undefined,
       plain_lyrics: undefined,
@@ -184,7 +236,6 @@ await withProviderFetch(
   {
     lrclib: [
       candidate({
-        trackName: 'Unrelated title',
         plainLyrics: 'Same lyrics body',
         syncedLyrics: undefined,
       }),
@@ -198,14 +249,95 @@ await withProviderFetch(
   async () => {
     const result = await new LyricsService().lookup(track())
     assert.equal(result.candidates.length, 1)
-    assert.equal(result.candidates[0]?.provider, 'lrclib')
+    assert.equal(result.candidates[0]?.provider, 'lyrica')
+    assert.deepEqual(result.candidates[0]?.alternateSourceLabels, ['LRCLIB'])
   },
 )
 
-await withProviderFetch({ lrclib: [], lyricaStatus: 500 }, async () => {
-  const result = await new LyricsService().lookup(track())
-  assert.equal(result.candidates.length, 0)
-})
+await withProviderFetch(
+  { lrclib: [candidate()], lyricaStatus: 500 },
+  async (calls) => {
+    const result = await new LyricsService().lookup(track())
+    assert.equal(calls.lyrica, 2, '500 responses get at most one retry')
+    assert.equal(result.autoMatch?.provider, 'lrclib')
+    assert.deepEqual(result.providerAttempts, [
+      { provider: 'lyrica', status: 'server-error' },
+      { provider: 'lrclib', status: 'success' },
+    ])
+  },
+)
+
+await withProviderFetch(
+  {
+    lrclib: [],
+    lyricaSynced: { status: 'error', error: { message: 'not found' } },
+  },
+  async () => {
+    const result = await new LyricsService().lookup(track())
+    assert.equal(result.status, 'not-found')
+    assert.deepEqual(result.providerAttempts, [
+      { provider: 'lyrica', status: 'not-found' },
+      { provider: 'lrclib', status: 'not-found' },
+    ])
+  },
+)
+
+await withProviderFetch(
+  {
+    lrclib: [],
+    lyricaResolver: (url) =>
+      url.searchParams.get('artist')?.toLocaleLowerCase() === 'mitsukiyo'
+        ? lyricaPayload({
+            title: '꽃, 바람, 그대',
+            artist: 'ミツキヨ',
+            language: 'ko',
+          })
+        : { status: 'error', error: { message: 'not found' } },
+  },
+  async (calls) => {
+    const result = await new LyricsService().lookup(
+      track({
+        title: '꽃, 바람, 그대 (OST)',
+        artist: '미츠키요 / Mitsukiyo / ミツキヨ',
+      }),
+    )
+    assert.ok(calls.lyrica <= 4)
+    assert.equal(result.candidates[0]?.provider, 'lyrica')
+    assert.equal(result.candidates[0]?.language, 'ko')
+    assert.equal(
+      result.autoMatch,
+      undefined,
+      'Lyrica candidates remain user-selectable',
+    )
+  },
+)
+
+for (const lyricaStatus of [404, 429]) {
+  await withProviderFetch(
+    { lrclib: [candidate()], lyricaStatus },
+    async (calls) => {
+      const result = await new LyricsService().lookup(track())
+      assert.equal(result.autoMatch?.provider, 'lrclib')
+      assert.ok(calls.lrclib > 0)
+    },
+  )
+}
+
+await withProviderFetch(
+  { lrclib: [candidate()], lyricaInvalidJson: true },
+  async () => {
+    const result = await new LyricsService().lookup(track())
+    assert.equal(result.autoMatch?.provider, 'lrclib')
+  },
+)
+
+await withProviderFetch(
+  { lrclib: [candidate()], lyricaHang: true },
+  async () => {
+    const result = await new LyricsService(5).lookup(track())
+    assert.equal(result.autoMatch?.provider, 'lrclib')
+  },
+)
 
 await withProviderFetch(
   { lrclib: [], lyricaSynced: lyricaPayload() },
@@ -224,8 +356,8 @@ await withProviderFetch(
   },
   async () => {
     const result = await new LyricsService().lookup(track())
-    assert.equal(result.autoMatch?.provider, 'lyrica')
-    assert.equal(result.autoMatch?.providerSource, 'lrclib')
+    assert.equal(result.autoMatch, undefined)
+    assert.equal(result.candidates[0]?.providerSource, 'lrclib')
   },
 )
 

@@ -8,14 +8,59 @@ import type {
   LyricsSyncProfile,
   GeneratedLyricsTimeline,
   GeneratedLyricsTimelineState,
+  UserLyricsSource,
 } from '../../src/types/models'
 import { getStoredData, setStoredData } from '../data'
 import { LyricsService } from '../lyricsService'
 import { validateLyricsSyncProfile } from '../../src/utils/lyricsSync'
 import { validateGeneratedLyricsTimeline } from '../../src/utils/generatedLyricsTimeline'
+import { parseManualLyrics } from '../../src/utils/manualLyrics'
 
 const MAX_LYRICS_BYTES = 2 * 1024 * 1024
 const lyricsService = new LyricsService()
+
+function manualLyricsId(trackId: string, content: string) {
+  let hash = 2_166_136_261
+  for (const character of `${trackId}\u0000${content}`) {
+    hash ^= character.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 16_777_619)
+  }
+  return -Math.max(1, hash >>> 0)
+}
+
+function manualLyricsSourceLabel(source: UserLyricsSource) {
+  if (source === 'imported-lrc') return '가져온 LRC 파일'
+  if (source === 'imported-text') return '가져온 텍스트 파일'
+  return '직접 입력한 가사'
+}
+
+export function createManualLyricsCandidate(
+  trackId: string,
+  content: string,
+  source: UserLyricsSource,
+): LyricsCandidate {
+  const data = getStoredData()
+  const track = data.tracks.find((item) => item.id === trackId)
+  if (!track) throw new Error('Track not found')
+  const parsed = parseManualLyrics(content)
+  const actualSource = parsed.kind === 'lrc' && source === 'imported-text'
+    ? 'imported-lrc'
+    : parsed.kind === 'text' && source === 'imported-lrc'
+      ? 'imported-text'
+      : source
+  return {
+    id: manualLyricsId(trackId, `${actualSource}\u0000${parsed.syncedLyrics ?? parsed.plainLyrics}`),
+    trackName: track.title,
+    artistName: track.artist,
+    albumName: track.album || undefined,
+    duration: track.duration,
+    syncedLyrics: parsed.syncedLyrics,
+    plainLyrics: parsed.plainLyrics,
+    instrumental: false,
+    source: actualSource,
+    sourceLabel: manualLyricsSourceLabel(actualSource),
+  }
+}
 
 export async function loadTrackLyrics(trackId: string): Promise<LyricsResult> {
   if (!/^[a-f0-9]{64}$/.test(trackId))
@@ -109,7 +154,7 @@ export function saveLyricsSelection(
     return { kind: 'none', content: '' }
   data.lyrics[trackId] = {
     trackId,
-    source: candidate.provider === 'lyrica' ? 'lyrica' : 'lrclib',
+    source: candidate.source ?? (candidate.provider === 'lyrica' ? 'lyrica' : 'lrclib'),
     syncedLyrics: candidate.syncedLyrics,
     plainLyrics: candidate.plainLyrics,
     instrumental: candidate.instrumental,
@@ -120,6 +165,7 @@ export function saveLyricsSelection(
     provider: candidate.provider,
     providerSource: candidate.providerSource,
     sourceLabel: candidate.sourceLabel,
+    alternateSourceLabels: candidate.alternateSourceLabels,
     userSelected: true,
   }
   delete data.lyricsSyncProfiles[trackId]

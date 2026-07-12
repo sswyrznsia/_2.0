@@ -74,6 +74,11 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
   const [searchTitle, setSearchTitle] = useState(currentTrack?.title ?? '')
   const [searchArtist, setSearchArtist] = useState(currentTrack?.artist ?? '')
   const [loading, setLoading] = useState(false)
+  const [manualLyricsOpen, setManualLyricsOpen] = useState(false)
+  const [manualLyricsApplying, setManualLyricsApplying] = useState(false)
+  const [manualLyricsError, setManualLyricsError] = useState<string | null>(
+    null,
+  )
   const [selectingCandidateId, setSelectingCandidateId] = useState<
     number | null
   >(null)
@@ -575,6 +580,33 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     setSearchResult(null)
     setGeneratedTimelineState({ timeline: null, valid: false })
     void refreshAutoSyncAvailability()
+  }
+
+  const importLyricsFile = async () => {
+    if (selectingCandidateRef.current !== null) return
+    setManualLyricsError(null)
+    try {
+      const candidate = await window.electronAPI.importLyricsFile(trackId)
+      if (!candidate) return
+      if (!window.confirm('선택한 가사 파일을 현재 곡에 적용할까요?')) return
+      await select(candidate)
+    } catch (error) {
+      window.alert(errorMessage(error, '가사 파일을 가져오지 못했습니다.'))
+    }
+  }
+
+  const applyManualLyricsInput = async (content: string) => {
+    setManualLyricsApplying(true)
+    setManualLyricsError(null)
+    try {
+      const candidate = await window.electronAPI.parseLyricsInput(trackId, content)
+      await select(candidate)
+      setManualLyricsOpen(false)
+    } catch (error) {
+      setManualLyricsError(errorMessage(error, '입력한 가사를 적용하지 못했습니다.'))
+    } finally {
+      setManualLyricsApplying(false)
+    }
   }
 
   const updateDraftSync = (patch: Partial<LyricsSyncProfile>) => {
@@ -1182,6 +1214,19 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
   }
 
   if (!lyrics) return <div className="lyrics-loading">가사를 불러오는 중…</div>
+  if (manualLyricsOpen)
+    return (
+      <ManualLyricsInputPanel
+        applying={manualLyricsApplying}
+        error={manualLyricsError}
+        onApply={applyManualLyricsInput}
+        onCancel={() => {
+          if (manualLyricsApplying) return
+          setManualLyricsError(null)
+          setManualLyricsOpen(false)
+        }}
+      />
+    )
   if (searchResult)
     return (
       <LyricsSearchPanel
@@ -1199,6 +1244,11 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         onSelect={(candidate) => void select(candidate)}
         selectingCandidateId={selectingCandidateId}
         onMarkInstrumental={() => void markInstrumental()}
+        onImportFile={() => void importLyricsFile()}
+        onOpenManualInput={() => {
+          setManualLyricsError(null)
+          setManualLyricsOpen(true)
+        }}
         onClose={() => (loading ? cancelSearch() : setSearchResult(null))}
         onCancel={cancelSearch}
       />
@@ -1224,6 +1274,11 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         onSelect={(candidate) => void select(candidate)}
         selectingCandidateId={selectingCandidateId}
         onMarkInstrumental={() => void markInstrumental()}
+        onImportFile={() => void importLyricsFile()}
+        onOpenManualInput={() => {
+          setManualLyricsError(null)
+          setManualLyricsOpen(true)
+        }}
         onCancel={cancelSearch}
       />
     )
@@ -1257,6 +1312,11 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         <LyricsSearchActions
           onFindSynced={() => void search('synced', true)}
           onChooseOther={() => void search('all', true)}
+          onImportFile={() => void importLyricsFile()}
+          onOpenManualInput={() => {
+            setManualLyricsError(null)
+            setManualLyricsOpen(true)
+          }}
         />
         <LyricsAutoSyncControls
           availability={autoSyncAvailability}
@@ -1412,6 +1472,11 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       <LyricsSearchActions
         onFindSynced={() => void search('synced', true)}
         onChooseOther={() => void search('all', true)}
+        onImportFile={() => void importLyricsFile()}
+        onOpenManualInput={() => {
+          setManualLyricsError(null)
+          setManualLyricsOpen(true)
+        }}
       />
       <LyricsAutoSyncControls
         availability={autoSyncAvailability}
@@ -2211,7 +2276,7 @@ function LyricsAppliedInfo({
       lyrics.providerSource,
     ),
   )
-  const source =
+  const source = formatLyricsSource(
     lyrics?.sourceLabel ??
     (lyrics?.provider === 'lyrica' || lyrics?.source === 'lyrica'
       ? 'Lyrica'
@@ -2219,9 +2284,17 @@ function LyricsAppliedInfo({
         ? 'LRCLIB'
         : lyrics?.source === 'local-lrc'
           ? '로컬 LRC'
-          : lyrics?.source === 'local-txt'
-            ? '로컬 텍스트'
-            : '사용자 가사')
+        : lyrics?.source === 'local-txt'
+          ? '로컬 텍스트'
+          : lyrics?.source === 'imported-lrc'
+            ? '가져온 LRC 파일'
+            : lyrics?.source === 'imported-text'
+              ? '가져온 텍스트 파일'
+              : lyrics?.source === 'manual-input'
+                ? '직접 입력한 가사'
+                : '사용자 가사'),
+    lyrics?.alternateSourceLabels,
+  )
   const sync = generatedTimeline
     ? previewing
       ? 'AI 줄별 타임스탬프 미리보기'
@@ -2244,6 +2317,12 @@ function LyricsAppliedInfo({
       </span>
     </div>
   )
+}
+
+function formatLyricsSource(primary: string, alternate: string[] = []) {
+  const labels = [primary, ...alternate].filter(Boolean)
+  if (labels.length < 2) return labels[0] || '사용자 가사'
+  return labels.join(primary.startsWith('Lyrica') ? ' + ' : ' · ')
 }
 
 function syncCorrectionCopy(
@@ -2274,12 +2353,74 @@ function syncStatusCopy(profile: LyricsSyncProfile | null, previewing = false) {
   return `사용자 보정 ${profile.offsetMs >= 0 ? '+' : ''}${(profile.offsetMs / 1_000).toFixed(1)}초`
 }
 
+function ManualLyricsInputPanel({
+  applying,
+  error,
+  onApply,
+  onCancel,
+}: {
+  applying: boolean
+  error: string | null
+  onApply: (content: string) => void
+  onCancel: () => void
+}) {
+  const [content, setContent] = useState('')
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        className="modal manual-lyrics-input"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="manual-lyrics-input-title"
+      >
+        <h2 id="manual-lyrics-input-title">가사 직접 입력</h2>
+        <p>
+          LRC timestamp가 있으면 동기화 가사로, 없으면 일반 가사로 저장합니다.
+        </p>
+        <textarea
+          autoFocus
+          data-manual-lyrics-textarea
+          value={content}
+          maxLength={2_000_000}
+          placeholder={'[00:15.200]첫 번째 줄\n[00:20.500]두 번째 줄\n\n또는 일반 가사를 붙여넣으세요.'}
+          onChange={(event) => setContent(event.target.value)}
+        />
+        {error && <p className="manual-lyrics-input__error" role="alert">{error}</p>}
+        <div>
+          <button
+            type="button"
+            className="button button--primary"
+            data-manual-lyrics-apply
+            disabled={applying || !content.trim()}
+            onClick={() => onApply(content)}
+          >
+            {applying ? '적용 중…' : '적용'}
+          </button>
+          <button
+            type="button"
+            className="button"
+            data-manual-lyrics-cancel
+            disabled={applying}
+            onClick={onCancel}
+          >
+            취소
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function LyricsSearchActions({
   onFindSynced,
   onChooseOther,
+  onImportFile,
+  onOpenManualInput,
 }: {
   onFindSynced: () => void
   onChooseOther: () => void
+  onImportFile: () => void
+  onOpenManualInput: () => void
 }) {
   return (
     <div className="lyrics-search-actions-inline">
@@ -2298,6 +2439,22 @@ function LyricsSearchActions({
         onClick={onChooseOther}
       >
         다른 가사 선택
+      </button>
+      <button
+        type="button"
+        className="button"
+        data-lyrics-import-file
+        onClick={onImportFile}
+      >
+        파일에서 가져오기
+      </button>
+      <button
+        type="button"
+        className="button"
+        data-lyrics-manual-input
+        onClick={onOpenManualInput}
+      >
+        직접 입력
       </button>
     </div>
   )
@@ -2318,8 +2475,24 @@ interface LyricsSearchPanelProps {
   onSelect: (candidate: LyricsCandidate) => void
   selectingCandidateId: number | null
   onMarkInstrumental: () => void
+  onImportFile: () => void
+  onOpenManualInput: () => void
   onCancel: () => void
   onClose?: () => void
+}
+
+const providerAttemptCopy = {
+  success: '후보를 확인했습니다.',
+  'not-found': '검색 결과가 없습니다.',
+  'network-error': '서버에 연결하지 못했습니다.',
+  timeout: '응답 시간이 초과되었습니다.',
+  'rate-limited': '요청이 일시적으로 제한되었습니다.',
+  'invalid-response': '응답을 처리하지 못했습니다.',
+  'server-error': '서버에 일시적인 문제가 있습니다.',
+} as const
+
+function providerName(provider: 'lyrica' | 'lrclib') {
+  return provider === 'lyrica' ? 'Lyrica' : 'LRCLIB'
 }
 
 function LyricsSearchPanel({
@@ -2337,6 +2510,8 @@ function LyricsSearchPanel({
   onSelect,
   selectingCandidateId,
   onMarkInstrumental,
+  onImportFile,
+  onOpenManualInput,
   onCancel,
   onClose,
 }: LyricsSearchPanelProps) {
@@ -2351,12 +2526,14 @@ function LyricsSearchPanel({
   const hasSyncedCandidate = result.candidates.some((candidate) =>
     Boolean(candidate.syncedLyrics),
   )
+  const providerAttempts = result.providerAttempts ?? []
+  const searchFailed = !loading && !candidates.length
   const elapsedSeconds = Math.floor(searchElapsedMs / 1_000)
   const timedOut = searchElapsedMs >= 45_000 && !candidates.length
   const resultStatus = timedOut
     ? '공개 가사 서버의 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.'
     : result.status === 'not-found'
-      ? '가사 검색 결과가 없습니다.'
+      ? '가사를 찾지 못했습니다.'
       : result.status === 'network-error'
         ? '가사 서버에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.'
         : statusCopy[result.status]
@@ -2397,6 +2574,22 @@ function LyricsSearchPanel({
             : resultStatus}
         </p>
       )}
+      {searchFailed && providerAttempts.length > 0 && (
+        <section className="lyrics-provider-status" data-lyrics-provider-status>
+          <strong>검색한 공급자</strong>
+          <ul>
+            {providerAttempts.map((attempt) => (
+              <li key={attempt.provider} data-lyrics-provider={attempt.provider}>
+                <span aria-hidden="true">✓</span>
+                <b>{providerName(attempt.provider)}</b>
+                <small>{providerAttemptCopy[attempt.status]}</small>
+              </li>
+            ))}
+          </ul>
+          <p>동기화 가사를 찾지 못했습니다.</p>
+          <p>추천: LRC 파일 가져오기, TXT/직접 입력, AI 자동 싱크 생성</p>
+        </section>
+      )}
       <div className="lyrics-search-fields">
         <label>
           제목
@@ -2416,13 +2609,34 @@ function LyricsSearchPanel({
         </label>
       </div>
       <div className="lyrics-search-actions">
+        {searchFailed && (
+          <>
+            <button
+              type="button"
+              className="button button--primary"
+              data-lyrics-import-file
+              onClick={onImportFile}
+            >
+              파일에서 가져오기
+            </button>
+            <button
+              type="button"
+              className="button"
+              data-lyrics-manual-input
+              onClick={onOpenManualInput}
+            >
+              직접 입력
+            </button>
+          </>
+        )}
         <button
           type="button"
-          className="button button--primary"
+          className={`button${searchFailed ? '' : ' button--primary'}`}
+          data-lyrics-search-submit
           disabled={loading}
           onClick={onSearch}
         >
-          {loading ? '검색 중…' : '검색'}
+          {loading ? '검색 중…' : searchFailed ? '다시 검색' : '검색'}
         </button>
         <button
           type="button"
@@ -2440,6 +2654,28 @@ function LyricsSearchPanel({
         >
           연주곡으로 표시
         </button>
+        {!searchFailed && (
+          <>
+            <button
+              type="button"
+              className="button"
+              data-lyrics-import-file
+              disabled={loading}
+              onClick={onImportFile}
+            >
+              파일에서 가져오기
+            </button>
+            <button
+              type="button"
+              className="button"
+              data-lyrics-manual-input
+              disabled={loading}
+              onClick={onOpenManualInput}
+            >
+              직접 입력
+            </button>
+          </>
+        )}
         {loading && (
           <button
             type="button"
@@ -2462,7 +2698,13 @@ function LyricsSearchPanel({
               <div className="lyrics-candidate__content">
                 <strong>{candidate.trackName}</strong>
                 <span>{candidate.artistName}</span>
-                <small>{candidate.sourceLabel ?? 'LRCLIB'}</small>
+                <small>
+                  {formatLyricsSource(
+                    candidate.sourceLabel ??
+                      (candidate.provider === 'lyrica' ? 'Lyrica' : 'LRCLIB'),
+                    candidate.alternateSourceLabels,
+                  )}
+                </small>
                 <small>
                   {candidate.albumName || '앨범 정보 없음'} ·{' '}
                   {candidate.duration
@@ -2470,6 +2712,9 @@ function LyricsSearchPanel({
                     : '길이 정보 없음'}{' '}
                   · {candidate.syncedLyrics ? '동기화 가사' : '일반 가사'}
                 </small>
+                {candidate.score !== undefined && (
+                  <small>신뢰도 {Math.round(candidate.score * 100)}%</small>
+                )}
               </div>
               <button
                 type="button"

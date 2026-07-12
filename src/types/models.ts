@@ -93,9 +93,17 @@ export interface TaskbarToggleSettingsPatch {
   taskbarToggleCustomRightGap: number
 }
 
+export type UserLyricsSource = 'imported-lrc' | 'imported-text' | 'manual-input'
+
 export interface TrackLyrics {
   trackId: string
-  source: 'lrclib' | 'lyrica' | 'local-lrc' | 'local-txt' | 'manual'
+  source:
+    | 'lrclib'
+    | 'lyrica'
+    | 'local-lrc'
+    | 'local-txt'
+    | 'manual'
+    | UserLyricsSource
   syncedLyrics?: string
   plainLyrics?: string
   instrumental?: boolean
@@ -106,6 +114,7 @@ export interface TrackLyrics {
   provider?: 'lrclib' | 'lyrica'
   providerSource?: string
   sourceLabel?: string
+  alternateSourceLabels?: string[]
   userSelected?: boolean
 }
 
@@ -274,6 +283,12 @@ export interface LyricsCandidate {
   provider?: 'lrclib' | 'lyrica'
   providerSource?: string
   sourceLabel?: string
+  alternateSourceLabels?: string[]
+  language?: string
+  providerMetadata?: Record<string, string | number | boolean | null>
+  timestampValid?: boolean
+  validLrcLineCount?: number
+  source?: UserLyricsSource
 }
 
 export type LyricsLookupStatus =
@@ -285,6 +300,22 @@ export type LyricsLookupStatus =
   | 'rate-limited'
   | 'metadata-missing'
 
+export type LyricsProvider = 'lyrica' | 'lrclib'
+
+export type LyricsProviderAttemptStatus =
+  | 'success'
+  | 'not-found'
+  | 'network-error'
+  | 'timeout'
+  | 'rate-limited'
+  | 'invalid-response'
+  | 'server-error'
+
+export interface LyricsProviderAttempt {
+  provider: LyricsProvider
+  status: LyricsProviderAttemptStatus
+}
+
 export interface LyricsSearchQuery {
   title?: string
   artist?: string
@@ -295,6 +326,7 @@ export interface LyricsSearchResult {
   candidates: LyricsCandidate[]
   normalizedTitle: string
   originalArtist?: string
+  providerAttempts?: LyricsProviderAttempt[]
 }
 
 export interface FocusTodo {

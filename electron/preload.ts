@@ -42,6 +42,10 @@ const api: ElectronApi = {
     ipcRenderer.invoke(IPC.lyricsSearch, trackId, query),
   saveLyricsSelection: (trackId, candidate) =>
     ipcRenderer.invoke(IPC.lyricsSaveSelection, trackId, candidate),
+  importLyricsFile: (trackId) =>
+    ipcRenderer.invoke(IPC.lyricsImportFile, trackId),
+  parseLyricsInput: (trackId, content) =>
+    ipcRenderer.invoke(IPC.lyricsParseInput, trackId, content),
   removeLyrics: (trackId) => ipcRenderer.invoke(IPC.lyricsRemove, trackId),
   markLyricsInstrumental: (trackId) =>
     ipcRenderer.invoke(IPC.lyricsMarkInstrumental, trackId),
