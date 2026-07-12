@@ -17,7 +17,10 @@ const inputPath = argument('--input')
 const outputPath = argument('--output')
 const workspaceRoot = argument('--workspace')
 const input = JSON.parse(await readFile(inputPath, 'utf8'))
-const mode = input.trackId[0]
+const mode =
+  Array.isArray(input.plainLyrics) && input.plainLyrics[0] === 'Zero one'
+    ? '9'
+    : input.trackId[0]
 
 if (process.env.PULSE_SHELF_AUTO_SYNC_MOCK_NO_COUNT !== '1')
   await appendFile(
@@ -67,7 +70,7 @@ if (mode === 'e') {
   emit({ event: 'stage', stage: 'building-anchors' })
 
   const totalLines = input.plainLyrics.length
-  const matchedLines = Math.min(mode === 'd' ? 2 : 4, totalLines)
+  const matchedLines = Math.min(mode === '9' ? 0 : mode === 'd' ? 2 : 4, totalLines)
   const resultTrackId = mode === 'c' ? '0'.repeat(64) : input.trackId
   const anchors = Array.from({ length: matchedLines }, (_, lineIndex) => ({
     lineIndex,

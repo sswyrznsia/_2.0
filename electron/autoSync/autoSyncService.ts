@@ -1069,6 +1069,23 @@ export class AutoSyncService {
     )
       throw new AutoSyncError('profile-invalid')
 
+    const lineTimings =
+      output.diagnostics.lineTimings ??
+      Array.from({ length: output.totalLines }, (_, lineIndex) => {
+        const anchor = output.anchors.find((item) => item.lineIndex === lineIndex)
+        return {
+          lineIndex,
+          source: anchor ? (anchor.source ?? 'direct') : 'unmatched',
+          confidence: anchor?.confidence ?? 0,
+          audioTimeMs: anchor?.audioTimeMs ?? null,
+        }
+      })
+    if (
+      lineTimings.length !== output.totalLines ||
+      lineTimings.some((line, index) => line.lineIndex !== index)
+    )
+      throw new AutoSyncError('profile-invalid')
+
     let previousGeneratedAudioTimeMs = -1
     const safeGeneratedAnchors =
       track.timelineMode === 'generated'
@@ -1125,6 +1142,7 @@ export class AutoSyncService {
           textHash: generatedLyricsLineHash(track.lines[anchor.lineIndex]),
           audioTimeMs: anchor.audioTimeMs,
           confidence: anchor.confidence,
+          source: anchor.source,
         })),
         lineCount: track.lines.length,
         lyricsTextHash: generatedLyricsTextHash(track.lines.join('\n')),
@@ -1158,7 +1176,9 @@ export class AutoSyncService {
         .map((anchor) => ({
           lineIndex: anchor.lineIndex,
           confidence: anchor.confidence,
+          ...(anchor.source ? { source: anchor.source } : {}),
         })),
+      lineTimings,
       processingTimeMs,
       peakGpuMemoryMiB: output.metrics.gpuMemory?.peakMiB ?? null,
       canApply,
@@ -1193,6 +1213,8 @@ export class AutoSyncService {
   }
 
   private async pruneCache(activeKey: string) {
+    // A mock worker must never prune real developer caches during UI tests.
+    if (this.options.workerOverride) return
     const cacheRoot = path.join(
       this.options.workspaceRoot,
       '.poc-cache',

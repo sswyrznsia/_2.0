@@ -50,6 +50,15 @@ export function validateGeneratedLyricsTimeline(
         (!Number.isFinite(line.confidence) ||
           line.confidence < 0 ||
           line.confidence > 1)) ||
+      (line.source !== undefined &&
+        ![
+          'direct',
+          'segment_recovered',
+          'interpolated',
+          'local_retry',
+          'unmatched',
+          'manual',
+        ].includes(line.source)) ||
       (timeline.source === 'ai' &&
         (line.confidence === undefined ||
           line.confidence < GENERATED_TIMELINE_MIN_CONFIDENCE))

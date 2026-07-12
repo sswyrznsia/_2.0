@@ -16,7 +16,7 @@ import threading
 import time
 import traceback
 import unicodedata
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, TextIO
 
@@ -490,18 +490,77 @@ def build_match_candidates(
 def choose_ordered_matches(
     candidates: list[MatchCandidate],
     progress_callback: Callable[[int, int], None] | None = None,
+    expected_times_ms: list[int | None] | None = None,
+    repeated_line_indexes: set[int] | None = None,
 ) -> list[MatchCandidate]:
+    """Choose one globally monotonic candidate path with contextual continuity.
+
+    Candidate confidence remains the dominant signal. Adjacent lyric lines and
+    compact token transitions receive small bonuses, while skips and abrupt
+    local warp changes receive bounded penalties. The bounds deliberately allow
+    cover-song interludes and piecewise timing shifts.
+    """
     nodes = sorted(candidates, key=lambda item: (item.line_index, item.token_end, item.token_start))
     if not nodes:
         return []
-    scores = [candidate.confidence - 0.35 for candidate in nodes]
+    repeated = repeated_line_indexes or set()
+    by_line: dict[int, list[MatchCandidate]] = {}
+    for candidate in nodes:
+        by_line.setdefault(candidate.line_index, []).append(candidate)
+
+    ambiguity_penalties: dict[MatchCandidate, float] = {}
+    for candidate in nodes:
+        if candidate.line_index not in repeated:
+            ambiguity_penalties[candidate] = 0.0
+            continue
+        close_alternatives = sum(
+            other is not candidate
+            and abs(other.audio_time_ms - candidate.audio_time_ms) >= 5_000
+            and other.confidence >= candidate.confidence - 0.03
+            for other in by_line[candidate.line_index]
+        )
+        ambiguity_penalties[candidate] = min(0.12, close_alternatives * 0.04)
+
+    def node_reward(candidate: MatchCandidate) -> float:
+        return candidate.confidence - 0.32 - ambiguity_penalties[candidate]
+
+    scores = [node_reward(candidate) - min(0.12, candidate.line_index * 0.004) for candidate in nodes]
     previous: list[int | None] = [None] * len(nodes)
     for index, candidate in enumerate(nodes):
         for prior_index in range(index):
             prior = nodes[prior_index]
-            if prior.line_index >= candidate.line_index or prior.token_end > candidate.token_start:
+            if (
+                prior.line_index >= candidate.line_index
+                or prior.token_end > candidate.token_start
+                or prior.audio_time_ms >= candidate.audio_time_ms
+            ):
                 continue
-            score = scores[prior_index] + candidate.confidence - 0.35
+            line_gap = candidate.line_index - prior.line_index
+            token_gap = candidate.token_start - prior.token_end
+            transition = 0.08 if line_gap == 1 else -min(0.18, (line_gap - 1) * 0.025)
+            if token_gap <= 2:
+                transition += 0.025
+            elif token_gap > 30:
+                transition -= min(0.08, (token_gap - 30) * 0.002)
+
+            if expected_times_ms:
+                prior_expected = expected_times_ms[prior.line_index]
+                candidate_expected = expected_times_ms[candidate.line_index]
+                if (
+                    prior_expected is not None
+                    and candidate_expected is not None
+                    and candidate_expected > prior_expected
+                ):
+                    expected_gap = candidate_expected - prior_expected
+                    audio_gap = candidate.audio_time_ms - prior.audio_time_ms
+                    warp = max(0.05, audio_gap / expected_gap)
+                    transition -= min(0.10, abs(math.log(warp)) * 0.035)
+                    prior_offset = prior.audio_time_ms - prior_expected
+                    candidate_offset = candidate.audio_time_ms - candidate_expected
+                    offset_jump = abs(candidate_offset - prior_offset)
+                    transition -= min(0.10, max(0, offset_jump - 12_000) / 80_000)
+
+            score = scores[prior_index] + node_reward(candidate) + transition
             if score > scores[index]:
                 scores[index] = score
                 previous[index] = prior_index
@@ -512,7 +571,16 @@ def choose_ordered_matches(
     while cursor is not None:
         selected.append(nodes[cursor])
         cursor = previous[cursor]
-    return list(reversed(selected))
+    selected.reverse()
+    adjusted: list[MatchCandidate] = []
+    for candidate in selected:
+        penalty = ambiguity_penalties[candidate]
+        adjusted.append(
+            replace(candidate, confidence=max(0.0, candidate.confidence - penalty))
+            if penalty
+            else candidate
+        )
+    return adjusted
 
 
 def adjust_time(original_ms: int, anchors: list[dict[str, int]]) -> int:
@@ -557,27 +625,323 @@ def comparison_metrics(anchors: list[dict[str, Any]]) -> dict[str, int | None]:
 
 
 def filter_temporal_outliers(
-    anchors: list[dict[str, Any]], max_local_deviation_ms: int = 1500
+    anchors: list[dict[str, Any]],
+    max_local_deviation_ms: int = 1500,
+    audio_duration_ms: int | None = None,
+    repeated_line_indexes: set[int] | None = None,
 ) -> tuple[list[dict[str, Any]], list[int]]:
-    if len(anchors) < 5:
-        return anchors, []
-    ordered = sorted(anchors, key=lambda item: item["lineIndex"])
-    kept: list[dict[str, Any]] = []
-    removed: list[int] = []
-    for index, anchor in enumerate(ordered):
-        if index < 2 or index + 2 >= len(ordered):
-            kept.append(anchor)
+    """Remove hard-invalid and isolated timing points, preserving shift runs.
+
+    The former four-neighbor median treated every member of a coherent offset
+    change as an independent outlier. We still use that detector to locate
+    suspicious points, but two or more consecutive, forward-moving lyric lines
+    form a timing segment and survive. Only isolated deviations are removed.
+    """
+    repeated = repeated_line_indexes or set()
+    ordered = sorted(
+        ({**anchor, "source": anchor.get("source", "direct")} for anchor in anchors),
+        key=lambda item: item["lineIndex"],
+    )
+    hard_removed: set[int] = set()
+    previous_audio_time = -1
+    for anchor in ordered:
+        audio_time = anchor.get("audioTimeMs")
+        invalid = (
+            isinstance(audio_time, bool)
+            or not isinstance(audio_time, (int, float))
+            or not math.isfinite(float(audio_time))
+            or audio_time < 0
+            or (audio_duration_ms is not None and audio_time > audio_duration_ms)
+            or audio_time <= previous_audio_time
+        )
+        if invalid:
+            hard_removed.add(anchor["lineIndex"])
+        else:
+            previous_audio_time = round(audio_time)
+
+    valid_ordered = [anchor for anchor in ordered if anchor["lineIndex"] not in hard_removed]
+    if len(valid_ordered) < 5:
+        return valid_ordered, sorted(hard_removed)
+
+    suspicious: list[int] = []
+    for index, anchor in enumerate(valid_ordered):
+        if index < 2 or index + 2 >= len(valid_ordered):
             continue
-        neighbors = ordered[index - 2 : index] + ordered[index + 1 : index + 3]
+        neighbors = valid_ordered[index - 2 : index] + valid_ordered[index + 1 : index + 3]
         local_delta = statistics.median(
             item["audioTimeMs"] - item["lyricTimeMs"] for item in neighbors
         )
         delta = anchor["audioTimeMs"] - anchor["lyricTimeMs"]
         if abs(delta - local_delta) > max_local_deviation_ms:
-            removed.append(anchor["lineIndex"])
+            suspicious.append(anchor["lineIndex"])
+
+    anchor_by_line = {anchor["lineIndex"]: anchor for anchor in valid_ordered}
+
+    def segment_model(line_indexes: list[int]) -> dict[str, Any] | None:
+        segment = [anchor_by_line[line_index] for line_index in line_indexes]
+        if statistics.median(anchor.get("confidence", 1.0) for anchor in segment) < 0.66:
+            return None
+        slopes = [
+            (right["audioTimeMs"] - left["audioTimeMs"])
+            / (right["lyricTimeMs"] - left["lyricTimeMs"])
+            for left_index, left in enumerate(segment)
+            for right in segment[left_index + 1 :]
+            if right["lyricTimeMs"] > left["lyricTimeMs"]
+        ]
+        if not slopes:
+            return None
+        robust_slope = statistics.median(slopes)
+        if not 0.15 <= robust_slope <= 4.5:
+            return None
+        if len(segment) == 2:
+            maximum_residual = 0.0
         else:
-            kept.append(anchor)
-    return kept, removed
+            intercept = statistics.median(
+                anchor["audioTimeMs"] - robust_slope * anchor["lyricTimeMs"]
+                for anchor in segment
+            )
+            maximum_residual = max(
+                abs(
+                    anchor["audioTimeMs"]
+                    - (intercept + robust_slope * anchor["lyricTimeMs"])
+                )
+                for anchor in segment
+            )
+            if maximum_residual > max(10_000, max_local_deviation_ms * 6):
+                return None
+        unique_support = sum(
+            anchor.get("confidence", 0) >= 0.8
+            and anchor["lineIndex"] not in repeated
+            for anchor in segment
+        )
+        return {
+            "slope": robust_slope,
+            "maximumResidualMs": round(maximum_residual),
+            "uniqueHighConfidenceSupport": unique_support,
+            "autoSupported": unique_support >= 2 and 0.4 <= robust_slope <= 2.5,
+        }
+
+    isolated_removed: set[int] = set()
+    recovered_models: dict[int, dict[str, Any]] = {}
+    group: list[int] = []
+    for line_index in suspicious + [sys.maxsize]:
+        if group and line_index != group[-1] + 1:
+            model = segment_model(group) if len(group) >= 2 else None
+            if model is None:
+                isolated_removed.update(group)
+            else:
+                for recovered_line in group:
+                    recovered_models[recovered_line] = model
+            group = []
+        if line_index != sys.maxsize:
+            group.append(line_index)
+
+    removed = hard_removed | isolated_removed
+    kept: list[dict[str, Any]] = []
+    for anchor in valid_ordered:
+        if anchor["lineIndex"] in removed:
+            continue
+        model = recovered_models.get(anchor["lineIndex"])
+        if model:
+            penalty = 0.95 if model["autoSupported"] else 0.70
+            anchor = {
+                **anchor,
+                "source": "segment_recovered",
+                "confidence": round(anchor.get("confidence", 0) * penalty, 4),
+            }
+        kept.append(anchor)
+    return kept, sorted(removed)
+
+
+def build_timing_segments(
+    anchors: list[dict[str, Any]],
+    repeated_line_indexes: set[int] | None = None,
+) -> tuple[list[dict[str, Any]], dict[int, int]]:
+    repeated = repeated_line_indexes or set()
+    ordered = sorted(anchors, key=lambda item: item["lineIndex"])
+    groups: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for anchor in ordered:
+        if current:
+            prior = current[-1]
+            lyric_gap = anchor["lyricTimeMs"] - prior["lyricTimeMs"]
+            audio_gap = anchor["audioTimeMs"] - prior["audioTimeMs"]
+            line_gap = anchor["lineIndex"] - prior["lineIndex"]
+            transition_slope = audio_gap / lyric_gap if lyric_gap > 0 else math.inf
+            prior_offset = prior["audioTimeMs"] - prior["lyricTimeMs"]
+            current_offset = anchor["audioTimeMs"] - anchor["lyricTimeMs"]
+            if (
+                line_gap > 2
+                or not 0.35 <= transition_slope <= 2.5
+                or abs(current_offset - prior_offset) > 12_000
+            ):
+                groups.append(current)
+                current = []
+        current.append(anchor)
+    if current:
+        groups.append(current)
+
+    segments: list[dict[str, Any]] = []
+    line_to_segment: dict[int, int] = {}
+    previous_segment: dict[str, Any] | None = None
+    for segment_index, group in enumerate(groups):
+        slopes = [
+            (right["audioTimeMs"] - left["audioTimeMs"])
+            / (right["lyricTimeMs"] - left["lyricTimeMs"])
+            for left_index, left in enumerate(group)
+            for right in group[left_index + 1 :]
+            if right["lyricTimeMs"] > left["lyricTimeMs"]
+        ]
+        slope = statistics.median(slopes) if slopes else None
+        intercept = (
+            statistics.median(
+                anchor["audioTimeMs"] - slope * anchor["lyricTimeMs"]
+                for anchor in group
+            )
+            if slope is not None
+            else None
+        )
+        residuals = (
+            [
+                abs(anchor["audioTimeMs"] - (intercept + slope * anchor["lyricTimeMs"]))
+                for anchor in group
+            ]
+            if slope is not None and intercept is not None
+            else []
+        )
+        unique_support = sum(
+            anchor.get("confidence", 0) >= 0.8
+            and anchor["lineIndex"] not in repeated
+            and anchor.get("source", "direct") == "direct"
+            for anchor in group
+        )
+        all_repeated = all(anchor["lineIndex"] in repeated for anchor in group)
+        boundary_discontinuity = None
+        if previous_segment:
+            prior = previous_segment["_lastAnchor"]
+            first = group[0]
+            lyric_gap = first["lyricTimeMs"] - prior["lyricTimeMs"]
+            expected_gap = lyric_gap * (previous_segment["slope"] or 1.0)
+            boundary_discontinuity = round(
+                (first["audioTimeMs"] - prior["audioTimeMs"]) - expected_gap
+            )
+        valid_model = (
+            slope is not None
+            and 0.4 <= slope <= 2.5
+            and unique_support >= 2
+            and not all_repeated
+            and (max(residuals, default=0) <= 10_000)
+        )
+        public = {
+            "segmentIndex": segment_index,
+            "startLineIndex": group[0]["lineIndex"],
+            "endLineIndex": group[-1]["lineIndex"],
+            "anchorCount": len(group),
+            "directHighConfidenceUniqueAnchors": unique_support,
+            "slope": round(slope, 6) if slope is not None else None,
+            "interceptMs": round(intercept) if intercept is not None else None,
+            "medianResidualMs": round(statistics.median(residuals)) if residuals else None,
+            "maximumResidualMs": round(max(residuals)) if residuals else None,
+            "boundaryDiscontinuityMs": boundary_discontinuity,
+            "allRepeatedLyrics": all_repeated,
+            "validForInterpolation": valid_model,
+            "driftRisk": not valid_model or (
+                boundary_discontinuity is not None
+                and abs(boundary_discontinuity) > 10_000
+            ),
+        }
+        segments.append(public)
+        for anchor in group:
+            line_to_segment[anchor["lineIndex"]] = segment_index
+        previous_segment = {**public, "_lastAnchor": group[-1]}
+    return segments, line_to_segment
+
+
+def interpolate_short_gaps(
+    lines: list[str],
+    anchors: list[dict[str, Any]],
+    line_to_segment: dict[int, int],
+    repeated_line_indexes: set[int] | None = None,
+    max_missing_lines: int = 2,
+) -> tuple[list[dict[str, Any]], list[int]]:
+    repeated = repeated_line_indexes or set()
+    ordered = sorted(anchors, key=lambda item: item["lineIndex"])
+    additions: list[dict[str, Any]] = []
+    for left, right in zip(ordered, ordered[1:]):
+        missing = list(range(left["lineIndex"] + 1, right["lineIndex"]))
+        if not missing or len(missing) > max_missing_lines:
+            continue
+        if line_to_segment.get(left["lineIndex"]) != line_to_segment.get(right["lineIndex"]):
+            continue
+        if (
+            left.get("confidence", 0) < 0.8
+            or right.get("confidence", 0) < 0.8
+            or left["lineIndex"] in repeated
+            or right["lineIndex"] in repeated
+        ):
+            continue
+        gap_ms = right["audioTimeMs"] - left["audioTimeMs"]
+        if gap_ms < (len(missing) + 1) * 500 or gap_ms > 30_000:
+            continue
+        weights = [max(1, len(normalize_text(lines[index]))) for index in missing]
+        right_weight = max(1, len(normalize_text(lines[right["lineIndex"]])))
+        total_weight = sum(weights) + right_weight
+        elapsed_weight = 0
+        for line_index, weight in zip(missing, weights):
+            elapsed_weight += weight
+            audio_time = round(
+                left["audioTimeMs"] + gap_ms * elapsed_weight / total_weight
+            )
+            confidence = round(
+                min(left["confidence"], right["confidence"]) * 0.92, 4
+            )
+            additions.append(
+                {
+                    "lineIndex": line_index,
+                    "lyricTimeMs": round(
+                        left["lyricTimeMs"]
+                        + (right["lyricTimeMs"] - left["lyricTimeMs"])
+                        * (line_index - left["lineIndex"])
+                        / (right["lineIndex"] - left["lineIndex"])
+                    ),
+                    "audioTimeMs": audio_time,
+                    "confidence": confidence,
+                    "whisperText": "[interpolated between direct anchors]",
+                    "source": "interpolated",
+                }
+            )
+    combined = sorted([*ordered, *additions], key=lambda item: item["lineIndex"])
+    return combined, [item["lineIndex"] for item in additions]
+
+
+def plan_local_retry_requests(
+    lines: list[str],
+    anchors: list[dict[str, Any]],
+    minimum_missing_lines: int = 2,
+    maximum_missing_lines: int = 3,
+) -> list[dict[str, Any]]:
+    ordered = sorted(anchors, key=lambda item: item["lineIndex"])
+    requests: list[dict[str, Any]] = []
+    for left, right in zip(ordered, ordered[1:]):
+        missing = list(range(left["lineIndex"] + 1, right["lineIndex"]))
+        if not minimum_missing_lines <= len(missing) <= maximum_missing_lines:
+            continue
+        start_ms = left["audioTimeMs"] + 250
+        end_ms = right["audioTimeMs"] - 250
+        if end_ms - start_ms < 1_000 or end_ms - start_ms > 45_000:
+            continue
+        requests.append(
+            {
+                "startLineIndex": missing[0],
+                "endLineIndex": missing[-1],
+                "audioStartMs": start_ms,
+                "audioEndMs": end_ms,
+                "prompt": " ".join(lines[index] for index in missing),
+                "allowedLineIndexes": missing,
+                "status": "not-run",
+            }
+        )
+    return requests
 
 
 def separate_vocals(
@@ -802,6 +1166,38 @@ def validate_pipeline_result(result: dict[str, Any]) -> None:
         or matched_lines + len(unmatched) != total_lines
     ):
         raise AutoSyncFailure("profile", "Result unmatched line indices are invalid")
+    diagnostics = result.get("diagnostics", {})
+    line_timings = diagnostics.get("lineTimings") if isinstance(diagnostics, dict) else None
+    valid_sources = {
+        "direct",
+        "segment_recovered",
+        "interpolated",
+        "local_retry",
+        "unmatched",
+    }
+    if line_timings is not None and (
+        not isinstance(line_timings, list)
+        or len(line_timings) != total_lines
+        or any(
+            not isinstance(item, dict)
+            or item.get("lineIndex") != index
+            or item.get("source") not in valid_sources
+            or isinstance(item.get("confidence"), bool)
+            or not isinstance(item.get("confidence"), (int, float))
+            or not math.isfinite(float(item["confidence"]))
+            or not 0 <= item["confidence"] <= 1
+            or (
+                item.get("audioTimeMs") is not None
+                and (
+                    isinstance(item["audioTimeMs"], bool)
+                    or not isinstance(item["audioTimeMs"], int)
+                    or item["audioTimeMs"] < 0
+                )
+            )
+            for index, item in enumerate(line_timings)
+        )
+    ):
+        raise AutoSyncFailure("profile", "Result line timing diagnostics are invalid")
 
 
 def run_pipeline(
@@ -997,7 +1393,21 @@ def run_pipeline(
                     total=total,
                 )
 
-            matches = choose_ordered_matches(candidates, progress_callback=ordered_progress)
+            normalized_line_counts: dict[str, int] = {}
+            for line in lines:
+                normalized = normalize_text(line)
+                normalized_line_counts[normalized] = normalized_line_counts.get(normalized, 0) + 1
+            repeated_line_indexes = {
+                index
+                for index, line in enumerate(lines)
+                if normalized_line_counts.get(normalize_text(line), 0) > 1
+            }
+            matches = choose_ordered_matches(
+                candidates,
+                progress_callback=ordered_progress,
+                expected_times_ms=original_times,
+                repeated_line_indexes=repeated_line_indexes,
+            )
             if not candidates:
                 emitter.progress("matching", 1.0, force=True)
             durations["matchingSeconds"] = round(time.perf_counter() - stage, 3)
@@ -1023,6 +1433,7 @@ def run_pipeline(
                     "audioTimeMs": match.audio_time_ms,
                     "confidence": round(match.confidence, 4),
                     "whisperText": match.whisper_text,
+                    "source": "direct",
                 }
             )
         emitter.progress(
@@ -1035,7 +1446,22 @@ def run_pipeline(
         emitter.progress(
             "building-anchors", 1.0, current=0, total=0, force=True
         )
-    anchors, temporal_outlier_lines = filter_temporal_outliers(anchors)
+    audio_duration_ms = max((token.end_ms for token in tokens), default=None)
+    anchors, temporal_outlier_lines = filter_temporal_outliers(
+        anchors,
+        audio_duration_ms=audio_duration_ms,
+        repeated_line_indexes=repeated_line_indexes,
+    )
+    timing_segments, line_to_segment = build_timing_segments(
+        anchors, repeated_line_indexes
+    )
+    anchors, interpolated_lines = interpolate_short_gaps(
+        lines,
+        anchors,
+        line_to_segment,
+        repeated_line_indexes,
+    )
+    local_retry_requests = plan_local_retry_requests(lines, anchors)
     matched_indices = {anchor["lineIndex"] for anchor in anchors}
     compatible_anchors = [
         {"lyricTimeMs": anchor["lyricTimeMs"], "audioTimeMs": anchor["audioTimeMs"]}
@@ -1072,6 +1498,39 @@ def run_pipeline(
             "whisperTokens": [asdict(token) for token in tokens],
             "bestConfidenceByLine": [round(best_by_line[index], 4) for index in range(len(lines))],
             "temporalOutlierLines": temporal_outlier_lines,
+            "timingSegments": timing_segments,
+            "interpolatedLines": interpolated_lines,
+            "localRetryRequests": local_retry_requests,
+            "lineTimings": [
+                {
+                    "lineIndex": index,
+                    "source": next(
+                        (
+                            anchor.get("source", "direct")
+                            for anchor in anchors
+                            if anchor["lineIndex"] == index
+                        ),
+                        "unmatched",
+                    ),
+                    "confidence": next(
+                        (
+                            round(anchor["confidence"], 4)
+                            for anchor in anchors
+                            if anchor["lineIndex"] == index
+                        ),
+                        0.0,
+                    ),
+                    "audioTimeMs": next(
+                        (
+                            anchor["audioTimeMs"]
+                            for anchor in anchors
+                            if anchor["lineIndex"] == index
+                        ),
+                        None,
+                    ),
+                }
+                for index in range(len(lines))
+            ],
         },
         "metrics": {
             **durations,

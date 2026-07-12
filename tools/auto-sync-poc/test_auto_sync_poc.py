@@ -11,10 +11,12 @@ import auto_sync_poc
 from auto_sync_poc import (
     AutoSyncFailure,
     JsonEventEmitter,
+    MatchCandidate,
     WordToken,
     adjust_time,
     atomic_write_json,
     build_match_candidates,
+    build_timing_segments,
     classify_failure,
     cleanup_cache_temporary_files,
     choose_ordered_matches,
@@ -23,7 +25,9 @@ from auto_sync_poc import (
     load_cached_tokens,
     map_original_times,
     normalize_text,
+    interpolate_short_gaps,
     parse_synced_lyrics,
+    plan_local_retry_requests,
     run_pipeline,
     separate_vocals,
     split_plain_lyrics,
@@ -196,6 +200,265 @@ class AutoSyncPocTests(unittest.TestCase):
         filtered, removed = filter_temporal_outliers(anchors)
         self.assertEqual(removed, [2])
         self.assertEqual([anchor["lineIndex"] for anchor in filtered], [0, 1, 3, 4])
+
+    def test_keeps_fixed_offset_segment(self):
+        anchors = [
+            {
+                "lineIndex": index,
+                "lyricTimeMs": index * 10_000,
+                "audioTimeMs": index * 10_000 + 4_000,
+                "confidence": 0.9,
+            }
+            for index in range(8)
+        ]
+        filtered, removed = filter_temporal_outliers(anchors)
+        self.assertEqual(removed, [])
+        self.assertEqual(len(filtered), len(anchors))
+
+    def test_keeps_mid_song_piecewise_offset_change(self):
+        offsets = [0, 0, 0, 8_000, 8_000, 8_000, 8_000, 8_000, 8_000, 0, 0, 0]
+        anchors = [
+            {
+                "lineIndex": index,
+                "lyricTimeMs": index * 10_000,
+                "audioTimeMs": index * 10_000 + offset,
+                "confidence": 0.9,
+            }
+            for index, offset in enumerate(offsets)
+        ]
+        filtered, removed = filter_temporal_outliers(anchors)
+        self.assertEqual(removed, [])
+        self.assertEqual(len(filtered), len(anchors))
+
+    def test_keeps_gradual_tempo_drift(self):
+        anchors = [
+            {
+                "lineIndex": index,
+                "lyricTimeMs": index * 10_000,
+                "audioTimeMs": round(index * 10_000 * 1.08 + 1_000),
+                "confidence": 0.9,
+            }
+            for index in range(10)
+        ]
+        filtered, removed = filter_temporal_outliers(anchors)
+        self.assertEqual(removed, [])
+        self.assertEqual(len(filtered), len(anchors))
+
+    def test_keeps_six_line_shift_run(self):
+        offsets = [0, 0, 0, -7_000, -8_000, -8_500, -8_000, -7_500, -7_000, 0, 0, 0]
+        anchors = [
+            {
+                "lineIndex": index,
+                "lyricTimeMs": index * 10_000,
+                "audioTimeMs": index * 10_000 + offset,
+                "confidence": 0.9,
+            }
+            for index, offset in enumerate(offsets)
+        ]
+        filtered, removed = filter_temporal_outliers(anchors)
+        self.assertEqual(removed, [])
+        self.assertEqual(len(filtered), len(anchors))
+
+    def test_recovers_all_thirteen_real_failure_song_shift_lines(self):
+        selected = [
+            (0, 20_400, 0, 0.9953),
+            (1, 25_624, 4_640, 0.9857),
+            (2, 30_849, 8_020, 0.9930),
+            (3, 36_073, 11_440, 0.9746),
+            (4, 41_298, 14_580, 0.9751),
+            (5, 46_522, 18_680, 0.9865),
+            (6, 51_746, 20_720, 0.9842),
+            (7, 56_971, 24_260, 0.9693),
+            (8, 62_195, 36_960, 0.9857),
+            (9, 67_420, 42_620, 0.9663),
+            (10, 72_644, 45_340, 0.9887),
+            (11, 77_868, 48_680, 0.9628),
+            (12, 83_093, 59_260, 0.9886),
+            (13, 88_317, 65_740, 0.9390),
+            (20, 124_888, 107_960, 0.8503),
+            (21, 130_112, 110_820, 0.9875),
+            (22, 135_337, 114_120, 0.8384),
+            (23, 140_561, 117_380, 0.9982),
+            (24, 145_785, 120_480, 0.9678),
+            (25, 151_010, 123_200, 0.7969),
+            (26, 156_234, 126_620, 0.9924),
+            (27, 161_459, 130_080, 0.9183),
+            (28, 166_683, 150_840, 0.9329),
+            (30, 177_132, 163_100, 0.8325),
+            (31, 182_356, 169_580, 0.8961),
+            (32, 187_580, 176_460, 0.9724),
+            (33, 192_805, 184_880, 0.9429),
+            (34, 198_029, 192_600, 0.9688),
+            (40, 229_376, 211_320, 0.9786),
+            (41, 234_600, 215_520, 0.9844),
+        ]
+        anchors = [
+            {
+                "lineIndex": line_index,
+                "lyricTimeMs": lyric_time,
+                "audioTimeMs": audio_time,
+                "confidence": confidence,
+            }
+            for line_index, lyric_time, audio_time, confidence in selected
+        ]
+        filtered, removed = filter_temporal_outliers(
+            anchors,
+            audio_duration_ms=254_676,
+            repeated_line_indexes={12, 13, 14, 32, 33, 34},
+        )
+        self.assertEqual(removed, [])
+        self.assertEqual(len(filtered), 30)
+        low_repeated = {
+            anchor["lineIndex"]: anchor
+            for anchor in filtered
+            if anchor["lineIndex"] in {33, 34}
+        }
+        self.assertTrue(
+            all(anchor["source"] == "segment_recovered" for anchor in low_repeated.values())
+        )
+        self.assertTrue(
+            all(anchor["confidence"] < 0.75 for anchor in low_repeated.values())
+        )
+
+    def test_segment_diagnostics_detect_boundary_discontinuity(self):
+        anchors = [
+            {"lineIndex": 0, "lyricTimeMs": 0, "audioTimeMs": 0, "confidence": 0.95},
+            {"lineIndex": 1, "lyricTimeMs": 10_000, "audioTimeMs": 10_000, "confidence": 0.95},
+            {"lineIndex": 2, "lyricTimeMs": 20_000, "audioTimeMs": 20_000, "confidence": 0.95},
+            {"lineIndex": 3, "lyricTimeMs": 30_000, "audioTimeMs": 55_000, "confidence": 0.95},
+            {"lineIndex": 4, "lyricTimeMs": 40_000, "audioTimeMs": 65_000, "confidence": 0.95},
+        ]
+        segments, mapping = build_timing_segments(anchors)
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(mapping[2], 0)
+        self.assertEqual(mapping[3], 1)
+        self.assertGreater(abs(segments[1]["boundaryDiscontinuityMs"]), 10_000)
+        self.assertTrue(segments[1]["driftRisk"])
+
+    def test_interpolates_one_missing_line_only_between_anchors(self):
+        lines = ["left", "missing words", "right"]
+        anchors = [
+            {"lineIndex": 0, "lyricTimeMs": 0, "audioTimeMs": 1_000, "confidence": 0.95},
+            {"lineIndex": 2, "lyricTimeMs": 20_000, "audioTimeMs": 11_000, "confidence": 0.9},
+        ]
+        combined, interpolated = interpolate_short_gaps(lines, anchors, {0: 0, 2: 0})
+        self.assertEqual(interpolated, [1])
+        middle = next(item for item in combined if item["lineIndex"] == 1)
+        self.assertEqual(middle["source"], "interpolated")
+        self.assertGreater(middle["audioTimeMs"], 1_000)
+        self.assertLess(middle["audioTimeMs"], 11_000)
+
+    def test_interpolates_two_lines_proportional_to_lyrics_length(self):
+        lines = ["left", "a", "muchlonger", "right"]
+        anchors = [
+            {"lineIndex": 0, "lyricTimeMs": 0, "audioTimeMs": 1_000, "confidence": 0.95},
+            {"lineIndex": 3, "lyricTimeMs": 30_000, "audioTimeMs": 16_000, "confidence": 0.95},
+        ]
+        combined, interpolated = interpolate_short_gaps(lines, anchors, {0: 0, 3: 0})
+        self.assertEqual(interpolated, [1, 2])
+        times = [item["audioTimeMs"] for item in combined]
+        self.assertEqual(times, sorted(times))
+        self.assertGreater(times[2] - times[1], times[1] - times[0])
+
+    def test_repeated_only_segment_is_not_valid_for_interpolation(self):
+        lines = ["chorus", "missing", "chorus"]
+        anchors = [
+            {"lineIndex": 0, "lyricTimeMs": 0, "audioTimeMs": 1_000, "confidence": 0.95},
+            {"lineIndex": 2, "lyricTimeMs": 20_000, "audioTimeMs": 11_000, "confidence": 0.95},
+        ]
+        segments, mapping = build_timing_segments(anchors, {0, 2})
+        self.assertTrue(segments[0]["allRepeatedLyrics"])
+        self.assertFalse(segments[0]["validForInterpolation"])
+        combined, interpolated = interpolate_short_gaps(
+            lines, anchors, mapping, {0, 2}
+        )
+        self.assertEqual(interpolated, [])
+        self.assertEqual(len(combined), 2)
+
+    def test_does_not_extrapolate_beyond_last_anchor(self):
+        lines = ["first", "second", "trailing one", "trailing two"]
+        anchors = [
+            {"lineIndex": 0, "lyricTimeMs": 0, "audioTimeMs": 1_000, "confidence": 0.95},
+            {"lineIndex": 1, "lyricTimeMs": 10_000, "audioTimeMs": 9_000, "confidence": 0.95},
+        ]
+        segments, mapping = build_timing_segments(anchors)
+        self.assertTrue(segments[0]["validForInterpolation"])
+        combined, interpolated = interpolate_short_gaps(lines, anchors, mapping)
+        self.assertEqual(interpolated, [])
+        self.assertEqual([item["lineIndex"] for item in combined], [0, 1])
+
+    def test_does_not_interpolate_without_right_anchor_or_across_long_interlude(self):
+        lines = ["left", "missing", "right", "trailing"]
+        long_gap = [
+            {"lineIndex": 0, "lyricTimeMs": 0, "audioTimeMs": 1_000, "confidence": 0.95},
+            {"lineIndex": 2, "lyricTimeMs": 20_000, "audioTimeMs": 50_000, "confidence": 0.95},
+        ]
+        combined, interpolated = interpolate_short_gaps(lines, long_gap, {0: 0, 2: 0})
+        self.assertEqual(interpolated, [])
+        self.assertEqual(len(combined), 2)
+
+    def test_local_retry_plan_is_bounded_to_missing_line_range(self):
+        lines = ["left", "one", "two", "three", "right", "tail"]
+        anchors = [
+            {"lineIndex": 0, "audioTimeMs": 1_000},
+            {"lineIndex": 4, "audioTimeMs": 20_000},
+        ]
+        requests = plan_local_retry_requests(lines, anchors)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["allowedLineIndexes"], [1, 2, 3])
+        self.assertEqual(requests[0]["startLineIndex"], 1)
+        self.assertEqual(requests[0]["endLineIndex"], 3)
+        self.assertEqual(requests[0]["status"], "not-run")
+
+    def test_rejects_reverse_and_outside_audio_candidates(self):
+        anchors = [
+            {"lineIndex": 0, "lyricTimeMs": 0, "audioTimeMs": 1_000},
+            {"lineIndex": 1, "lyricTimeMs": 10_000, "audioTimeMs": 2_000},
+            {"lineIndex": 2, "lyricTimeMs": 20_000, "audioTimeMs": 1_500},
+            {"lineIndex": 3, "lyricTimeMs": 30_000, "audioTimeMs": 31_000},
+            {"lineIndex": 4, "lyricTimeMs": 40_000, "audioTimeMs": 61_000},
+        ]
+        filtered, removed = filter_temporal_outliers(
+            anchors, audio_duration_ms=60_000
+        )
+        self.assertEqual(removed, [2, 4])
+        self.assertEqual([anchor["lineIndex"] for anchor in filtered], [0, 1, 3])
+
+    def test_rejects_incoherent_consecutive_timing_spikes(self):
+        anchors = [
+            {
+                "lineIndex": index,
+                "lyricTimeMs": index * 10_000,
+                "audioTimeMs": audio_time,
+                "confidence": 0.9,
+            }
+            for index, audio_time in enumerate(
+                [0, 10_000, 20_000, 80_000, 150_000, 160_000, 170_000]
+            )
+        ]
+        filtered, removed = filter_temporal_outliers(anchors)
+        self.assertTrue(removed)
+        self.assertLess(len(filtered), len(anchors))
+
+    def test_global_path_prefers_adjacent_context_and_strict_time_order(self):
+        candidates = [
+            MatchCandidate(0, 0, 1, 1_000, 0.92, "a"),
+            MatchCandidate(1, 1, 2, 2_000, 0.90, "chorus"),
+            MatchCandidate(1, 4, 5, 8_000, 0.93, "chorus"),
+            MatchCandidate(2, 2, 3, 3_000, 0.91, "b"),
+            MatchCandidate(3, 5, 6, 9_000, 0.90, "chorus"),
+        ]
+        matches = choose_ordered_matches(
+            candidates,
+            expected_times_ms=[1_000, 2_000, 3_000, 9_000],
+            repeated_line_indexes={1, 3},
+        )
+        self.assertEqual([match.line_index for match in matches], [0, 1, 2, 3])
+        self.assertEqual([match.audio_time_ms for match in matches], [1_000, 2_000, 3_000, 9_000])
+        self.assertTrue(
+            all(left.audio_time_ms < right.audio_time_ms for left, right in zip(matches, matches[1:]))
+        )
+        self.assertLess(matches[1].confidence, 0.90)
 
     def test_json_events_are_compact_one_line_objects_and_flush(self):
         stream = FlushRecordingStream()

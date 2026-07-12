@@ -73,6 +73,9 @@ const detailedAnchorSchema = z
     audioTimeMs: z.number().int().nonnegative(),
     confidence: z.number().finite().min(0).max(1),
     whisperText: z.string().max(10_000),
+    source: z
+      .enum(['direct', 'segment_recovered', 'interpolated', 'local_retry'])
+      .optional(),
   })
   .strict()
 
@@ -142,6 +145,61 @@ export const autoSyncOutputSchema = z
         temporalOutlierLines: z
           .array(z.number().int().nonnegative())
           .max(20_000),
+        timingSegments: z
+          .array(
+            z
+              .object({
+                segmentIndex: z.number().int().nonnegative(),
+                startLineIndex: z.number().int().nonnegative(),
+                endLineIndex: z.number().int().nonnegative(),
+                anchorCount: z.number().int().positive(),
+                directHighConfidenceUniqueAnchors: z.number().int().nonnegative(),
+                slope: z.number().finite().nullable(),
+                interceptMs: z.number().int().nullable(),
+                medianResidualMs: z.number().int().nonnegative().nullable(),
+                maximumResidualMs: z.number().int().nonnegative().nullable(),
+                boundaryDiscontinuityMs: z.number().int().nullable(),
+                allRepeatedLyrics: z.boolean(),
+                validForInterpolation: z.boolean(),
+                driftRisk: z.boolean(),
+              })
+              .strict(),
+          )
+          .optional(),
+        interpolatedLines: z.array(z.number().int().nonnegative()).optional(),
+        localRetryRequests: z
+          .array(
+            z
+              .object({
+                startLineIndex: z.number().int().nonnegative(),
+                endLineIndex: z.number().int().nonnegative(),
+                audioStartMs: z.number().int().nonnegative(),
+                audioEndMs: z.number().int().nonnegative(),
+                prompt: z.string().max(10_000),
+                allowedLineIndexes: z.array(z.number().int().nonnegative()),
+                status: z.literal('not-run'),
+              })
+              .strict(),
+          )
+          .optional(),
+        lineTimings: z
+          .array(
+            z
+              .object({
+                lineIndex: z.number().int().nonnegative(),
+                source: z.enum([
+                  'direct',
+                  'segment_recovered',
+                  'interpolated',
+                  'local_retry',
+                  'unmatched',
+                ]),
+                confidence: z.number().finite().min(0).max(1),
+                audioTimeMs: z.number().int().nonnegative().nullable(),
+              })
+              .strict(),
+          )
+          .optional(),
       })
       .strict(),
     metrics: z

@@ -355,6 +355,24 @@ await run('plain-only result produces a separate safe generated timeline', () =>
   }),
 )
 
+await run('mock worker does not prune developer cache fixtures', () =>
+  withFixture(async (fixture) => {
+    const cacheRoot = path.join(fixture.workspaceRoot, '.poc-cache', 'auto-sync')
+    const sentinels = ['7', '8', '9'].map((value) => value.repeat(64))
+    await Promise.all(
+      sentinels.map((cacheKey) =>
+        mkdir(path.join(cacheRoot, cacheKey), { recursive: true }),
+      ),
+    )
+    fixture.tracks.set(TRACK_OTHER, trackSource(TRACK_OTHER, fixture.audioPath))
+    await fixture.service.start(TRACK_OTHER)
+    await waitForJob(fixture.service, TRACK_OTHER, ['completed'])
+    await waitForIdle(fixture.service)
+    for (const cacheKey of sentinels)
+      assert.equal(await exists(path.join(cacheRoot, cacheKey)), true)
+  }),
+)
+
 await run('plain-only reverse timing is excluded from automatic apply', () =>
   withFixture(async (fixture) => {
     fixture.tracks.set(

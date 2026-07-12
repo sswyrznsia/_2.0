@@ -19,7 +19,11 @@ import type {
 import { formatTime } from '../../utils/format'
 import { findActiveLyricLineIndex, parseLrc } from '../../utils/lyrics'
 import { adjustLyricTimeMs } from '../../utils/lyricsSync'
-import { splitGeneratedLyricsText } from '../../utils/generatedLyricsTimeline'
+import {
+  generatedLyricsLineHash,
+  generatedLyricsTextHash,
+  splitGeneratedLyricsText,
+} from '../../utils/generatedLyricsTimeline'
 import { EmptyState } from '../common/EmptyState'
 
 type LyricsSearchMode = 'all' | 'synced'
@@ -94,6 +98,19 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     useState<GeneratedLyricsTimelineState>({ timeline: null, valid: false })
   const [autoSyncPreviewTimeline, setAutoSyncPreviewTimeline] =
     useState<GeneratedLyricsTimeline | null>(null)
+  const [draftGeneratedTimeline, setDraftGeneratedTimeline] =
+    useState<GeneratedLyricsTimeline | null>(null)
+  const [inlineGeneratedDraft, setInlineGeneratedDraft] =
+    useState<GeneratedLyricsTimeline | null>(null)
+  const [inlineGeneratedEditing, setInlineGeneratedEditing] = useState(false)
+  const [inlineSelectedLineIndex, setInlineSelectedLineIndex] = useState<
+    number | null
+  >(null)
+  const [inlineTimestampInput, setInlineTimestampInput] = useState('')
+  const [inlineTimestampInputError, setInlineTimestampInputError] = useState<
+    string | null
+  >(null)
+  const [inlineSaveError, setInlineSaveError] = useState<string | null>(null)
   const [autoSyncEditingJobId, setAutoSyncEditingJobId] = useState<
     string | null
   >(null)
@@ -153,6 +170,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         setAutoSyncJob(null)
         setAutoSyncPreviewProfile(null)
         setAutoSyncPreviewTimeline(null)
+        setDraftGeneratedTimeline(null)
         setAutoSyncEditingJobId(null)
         setAutoSyncUiError(null)
         return
@@ -162,6 +180,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       if (next.status === 'failed') {
         setAutoSyncPreviewProfile(null)
         setAutoSyncPreviewTimeline(null)
+        setDraftGeneratedTimeline(null)
         setAutoSyncEditingJobId(null)
         setAutoSyncUiError(
           next.error?.message ?? '자동 싱크 분석에 실패했습니다.',
@@ -281,10 +300,24 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     ? draftSyncProfile
     : (autoSyncPreviewProfile ?? savedSyncProfile)
   const activeGeneratedTimeline =
+    inlineGeneratedDraft ??
+    draftGeneratedTimeline ??
     autoSyncPreviewTimeline ??
     (generatedTimelineState.valid ? generatedTimelineState.timeline : null)
   const generatedTimingByLine = new Map(
     activeGeneratedTimeline?.lines.map((line) => [line.lineIndex, line]) ?? [],
+  )
+  const autoSyncLineTimingByLine = new Map(
+    (autoSyncJob?.status === 'completed'
+      ? autoSyncJob.result?.lineTimings
+      : undefined
+    )?.map((line) => [line.lineIndex, line]) ?? [],
+  )
+  const generatedTimingSourceByLine = new Map(
+    activeGeneratedTimeline?.lines.map((line) => [
+      line.lineIndex,
+      line.source ?? (activeGeneratedTimeline.source === 'manual' ? 'manual' : 'direct'),
+    ]) ?? [],
   )
   const generatedLines = plainLines.map((text, index) => ({
     text,
@@ -293,6 +326,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
   const autoSyncPreviewing = Boolean(
     autoSyncPreviewProfile || autoSyncPreviewTimeline,
   )
+  const editingGeneratedTimeline = Boolean(syncEditing && draftGeneratedTimeline)
   const lines = rawLines.map((line) => ({
     ...line,
     originalTimeMs: Math.round(line.time * 1_000),
@@ -318,12 +352,16 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     activeIndex,
   ].join(':')
   useEffect(() => {
-    if (activeIndex >= 0 && Date.now() >= autoScrollPausedUntil.current)
+    if (
+      activeIndex >= 0 &&
+      (!inlineGeneratedEditing || inlineSelectedLineIndex === null) &&
+      Date.now() >= autoScrollPausedUntil.current
+    )
       lineRefs.current[activeIndex]?.scrollIntoView({
         block: 'center',
         behavior: 'smooth',
       })
-  }, [activeIndex, activeLineIdentity])
+  }, [activeIndex, activeLineIdentity, inlineGeneratedEditing, inlineSelectedLineIndex])
 
   useEffect(() => {
     if (!loading) return
@@ -395,6 +433,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     setAutoSyncJob(null)
     setAutoSyncPreviewProfile(null)
     setAutoSyncPreviewTimeline(null)
+    setDraftGeneratedTimeline(null)
     setAutoSyncEditingJobId(null)
     setAutoSyncConfirming(false)
   }
@@ -474,6 +513,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     setAutoSyncStarting(true)
     setAutoSyncPreviewProfile(null)
     setAutoSyncPreviewTimeline(null)
+    setDraftGeneratedTimeline(null)
     setAutoSyncEditingJobId(null)
     setAutoSyncUiError(null)
     try {
@@ -558,8 +598,67 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     ].sort((left, right) => left.lyricTimeMs - right.lyricTimeMs)
     updateDraftSync({ anchors })
   }
+  const addSelectedGeneratedTiming = () => {
+    if (!draftGeneratedTimeline || !plainLines[selectedLineIndex]) return
+    const timing = {
+      lineIndex: selectedLineIndex,
+      textHash: generatedLyricsLineHash(plainLines[selectedLineIndex]),
+      audioTimeMs: Math.max(0, Math.round(currentTime * 1_000)),
+      confidence: 1,
+    }
+    setDraftGeneratedTimeline((timeline) =>
+      timeline
+        ? {
+            ...timeline,
+            lines: [
+              ...timeline.lines.filter(
+                (line) => line.lineIndex !== timing.lineIndex,
+              ),
+              timing,
+            ].sort((left, right) => left.lineIndex - right.lineIndex),
+          }
+        : timeline,
+    )
+  }
+  const clearSelectedGeneratedTiming = () => {
+    if (!draftGeneratedTimeline) return
+    setDraftGeneratedTimeline((timeline) =>
+      timeline
+        ? {
+            ...timeline,
+            lines: timeline.lines.filter(
+              (line) => line.lineIndex !== selectedLineIndex,
+            ),
+          }
+        : timeline,
+    )
+  }
   const saveSync = async () => {
     const editingAutoResult = autoSyncEditingJobId !== null
+    if (draftGeneratedTimeline) {
+      try {
+        const saved = await window.electronAPI.saveGeneratedLyricsTimeline({
+          ...draftGeneratedTimeline,
+          source: 'manual',
+          createdAt: Date.now(),
+        })
+        setGeneratedTimelineState({ timeline: saved, valid: true })
+        setDraftGeneratedTimeline(null)
+        setAutoSyncPreviewProfile(null)
+        setAutoSyncPreviewTimeline(null)
+        setSyncEditing(false)
+        if (autoSyncEditingJobId) {
+          const jobId = autoSyncEditingJobId
+          setAutoSyncEditingJobId(null)
+          await discardAutoSync(jobId)
+        }
+      } catch (error) {
+        setAutoSyncUiError(
+          errorMessage(error, 'AI 줄별 타임라인을 저장하지 못했습니다.'),
+        )
+      }
+      return
+    }
     if (
       editingAutoResult &&
       savedSyncProfile &&
@@ -607,6 +706,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     )
     setAutoSyncPreviewProfile(null)
     setAutoSyncPreviewTimeline(null)
+    setDraftGeneratedTimeline(null)
     setAutoSyncEditingJobId(null)
     setSyncEditing(false)
   }
@@ -618,6 +718,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     }
     setAutoSyncPreviewProfile(null)
     setAutoSyncPreviewTimeline(null)
+    setDraftGeneratedTimeline(null)
     setAutoSyncEditingJobId(null)
     setDraftSyncProfile(
       savedSyncProfile ?? { trackId, offsetMs: 0, anchors: [], updatedAt: 0 },
@@ -646,10 +747,18 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
 
   const openAutoSyncInEditor = () => {
     const job = autoSyncJobRef.current
-    if (!job?.result || !rawLines.length) return
+    if (!job?.result) return
     setAutoSyncPreviewProfile(null)
     setAutoSyncPreviewTimeline(null)
-    setDraftSyncProfile(autoSyncProfile(job.result))
+    if (job.result.generatedLyricsTimeline && plainLines.length) {
+      setDraftGeneratedTimeline(
+        generatedTimelineFromAutoSyncResult(job.result, plainLines),
+      )
+    } else {
+      if (!rawLines.length) return
+      setDraftGeneratedTimeline(null)
+      setDraftSyncProfile(autoSyncProfile(job.result))
+    }
     setAutoSyncEditingJobId(job.jobId)
     setSelectedLineIndex(Math.max(0, activeIndex))
     setSyncEditing(true)
@@ -707,10 +816,369 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     }
   }
 
+  const inlineDraftIssues = validateGeneratedTimelineDraft(
+    inlineGeneratedDraft,
+    currentTrack?.duration ?? null,
+  )
+  const inlineDraftDirty = Boolean(
+    inlineGeneratedDraft &&
+      generatedTimelineState.timeline &&
+      generatedTimelineSignature(inlineGeneratedDraft) !==
+        generatedTimelineSignature(generatedTimelineState.timeline),
+  )
+  const selectInlineGeneratedLine = (lineIndex: number) => {
+    const timing = inlineGeneratedDraft?.lines.find(
+      (line) => line.lineIndex === lineIndex,
+    )
+    setInlineSelectedLineIndex(lineIndex)
+    setInlineTimestampInput(
+      timing ? formatGeneratedTimestamp(timing.audioTimeMs) : '',
+    )
+    setInlineTimestampInputError(null)
+    setInlineSaveError(null)
+  }
+  const updateInlineGeneratedTiming = (lineIndex: number, audioTimeMs: number) => {
+    if (!inlineGeneratedDraft || !plainLines[lineIndex]) return
+    const existing = inlineGeneratedDraft.lines.find(
+      (line) => line.lineIndex === lineIndex,
+    )
+    const timing = {
+      lineIndex,
+      textHash: generatedLyricsLineHash(plainLines[lineIndex]),
+      audioTimeMs: Math.round(audioTimeMs),
+      ...(existing?.confidence === undefined
+        ? {}
+        : { confidence: existing.confidence }),
+      source: 'manual' as const,
+    }
+    setInlineGeneratedDraft((timeline) =>
+      timeline
+        ? {
+            ...timeline,
+            lines: [
+              ...timeline.lines.filter((line) => line.lineIndex !== lineIndex),
+              timing,
+            ].sort((left, right) => left.lineIndex - right.lineIndex),
+          }
+        : timeline,
+    )
+  }
+  const setInlineGeneratedToCurrentTime = () => {
+    if (inlineSelectedLineIndex === null) return
+    const milliseconds = Math.max(0, Math.round(currentTime * 1_000))
+    updateInlineGeneratedTiming(inlineSelectedLineIndex, milliseconds)
+    setInlineTimestampInput(formatGeneratedTimestamp(milliseconds))
+    setInlineTimestampInputError(null)
+  }
+  const adjustInlineGeneratedTiming = (deltaMs: number) => {
+    if (inlineSelectedLineIndex === null) return
+    const timing = inlineGeneratedDraft?.lines.find(
+      (line) => line.lineIndex === inlineSelectedLineIndex,
+    )
+    if (!timing) return
+    const milliseconds = Math.max(0, timing.audioTimeMs + deltaMs)
+    updateInlineGeneratedTiming(inlineSelectedLineIndex, milliseconds)
+    setInlineTimestampInput(formatGeneratedTimestamp(milliseconds))
+    setInlineTimestampInputError(null)
+  }
+  const deleteInlineGeneratedTiming = () => {
+    if (inlineSelectedLineIndex === null) return
+    setInlineGeneratedDraft((timeline) =>
+      timeline
+        ? {
+            ...timeline,
+            lines: timeline.lines.filter(
+              (line) => line.lineIndex !== inlineSelectedLineIndex,
+            ),
+          }
+        : timeline,
+    )
+    setInlineTimestampInput('')
+    setInlineTimestampInputError(null)
+  }
+  const updateInlineTimestampInput = (value: string) => {
+    setInlineTimestampInput(value)
+    if (inlineSelectedLineIndex === null) return
+    const milliseconds = parseGeneratedTimestamp(value)
+    if (milliseconds === null) {
+      setInlineTimestampInputError('mm:ss.SSS 형식으로 입력하세요.')
+      return
+    }
+    setInlineTimestampInputError(null)
+    updateInlineGeneratedTiming(inlineSelectedLineIndex, milliseconds)
+  }
+  const startInlineGeneratedEditing = () => {
+    const timeline = generatedTimelineState.timeline
+    if (!generatedTimelineState.valid || !timeline) return
+    setInlineGeneratedDraft({ ...timeline, lines: timeline.lines.map((line) => ({ ...line })) })
+    setInlineGeneratedEditing(true)
+    setInlineSelectedLineIndex(null)
+    setInlineTimestampInput('')
+    setInlineTimestampInputError(null)
+    setInlineSaveError(null)
+  }
+  const cancelInlineGeneratedEditing = () => {
+    setInlineGeneratedDraft(null)
+    setInlineGeneratedEditing(false)
+    setInlineSelectedLineIndex(null)
+    setInlineTimestampInput('')
+    setInlineTimestampInputError(null)
+    setInlineSaveError(null)
+  }
+  const saveInlineGeneratedEditing = async () => {
+    if (!inlineGeneratedDraft || inlineTimestampInputError || inlineDraftIssues.size) {
+      setInlineSaveError('timestamp 오류를 수정한 뒤 저장하세요.')
+      return
+    }
+    try {
+      const saved = await window.electronAPI.saveGeneratedLyricsTimeline({
+        ...inlineGeneratedDraft,
+        source: inlineDraftDirty ? 'manual' : inlineGeneratedDraft.source,
+        createdAt: Date.now(),
+      })
+      setGeneratedTimelineState({ timeline: saved, valid: true })
+      cancelInlineGeneratedEditing()
+    } catch (error) {
+      setInlineSaveError(
+        errorMessage(error, 'AI 줄별 타임라인을 저장하지 못했습니다.'),
+      )
+    }
+  }
   const resetGeneratedTimeline = async () => {
+    if (
+      inlineGeneratedEditing &&
+      inlineDraftDirty &&
+      !window.confirm(
+        '저장하지 않은 줄별 timestamp 수정이 있습니다.\n\n확인: 편집을 취소하고 초기화\n취소: 계속 편집',
+      )
+    )
+      return
+    if (inlineGeneratedEditing) cancelInlineGeneratedEditing()
     await window.electronAPI.clearGeneratedLyricsTimeline(trackId)
     setGeneratedTimelineState({ timeline: null, valid: false })
     setAutoSyncPreviewTimeline(null)
+  }
+
+  const renderSyncEditor = () => {
+    if (!syncEditing) return null
+    if (editingGeneratedTimeline) {
+      const selectedTiming = generatedTimingByLine.get(selectedLineIndex)
+      return (
+        <div className="lyrics-sync-editor" data-generated-sync-editor>
+          <strong>
+            선택 줄 {plainLines[selectedLineIndex] || '가사 줄을 선택하세요'}
+          </strong>
+          <span>현재 재생 시간: {formatTime(currentTime)}</span>
+          <small>
+            {selectedTiming
+              ? `초기 timestamp: ${formatTime(selectedTiming.audioTimeMs / 1_000)}`
+              : 'timestamp 미지정 · 현재 재생 시간으로 직접 지정할 수 있습니다.'}
+          </small>
+          <div>
+            <button type="button" onClick={addSelectedGeneratedTiming}>
+              선택 줄을 현재 시간에 맞추기
+            </button>
+            <button
+              type="button"
+              onClick={clearSelectedGeneratedTiming}
+              disabled={!selectedTiming}
+            >
+              선택 줄 timestamp 지우기
+            </button>
+          </div>
+          <small>timestamp {draftGeneratedTimeline?.lines.length ?? 0}개</small>
+          <div>
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={() => void saveSync()}
+            >
+              저장
+            </button>
+            <button type="button" className="button" onClick={cancelSyncEditing}>
+              취소
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return (
+      <div className="lyrics-sync-editor">
+        <strong>
+          선택 줄 {lines[selectedLineIndex]?.text || '가사 줄을 선택하세요'}
+        </strong>
+        <span>현재 재생 시간: {formatTime(currentTime)}</span>
+        <div>
+          {[-1000, -100, 100, 1000].map((delta) => (
+            <button
+              type="button"
+              key={delta}
+              onClick={() =>
+                updateDraftSync({
+                  offsetMs: draftSyncProfile.offsetMs + delta,
+                })
+              }
+            >
+              {delta > 0 ? '+' : ''}
+              {delta}ms
+            </button>
+          ))}
+        </div>
+        <div>
+          <button type="button" onClick={addSelectedAnchor}>
+            선택 줄을 현재 시간에 맞추기
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              updateDraftSync({
+                anchors: draftSyncProfile.anchors.slice(0, -1),
+              })
+            }
+            disabled={!draftSyncProfile.anchors.length}
+          >
+            마지막 기준점 삭제
+          </button>
+        </div>
+        <small>
+          기준점 {draftSyncProfile.anchors.length}개 · 오프셋{' '}
+          {draftSyncProfile.offsetMs}ms
+        </small>
+        <div>
+          <button
+            type="button"
+            className="button button--primary"
+            onClick={() => void saveSync()}
+          >
+            저장
+          </button>
+          <button type="button" className="button" onClick={cancelSyncEditing}>
+            취소
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const renderInlineGeneratedEditor = () => {
+    if (!inlineGeneratedEditing) return null
+    const selectedTiming =
+      inlineSelectedLineIndex === null
+        ? undefined
+        : generatedTimingByLine.get(inlineSelectedLineIndex)
+    const selectedIssue =
+      inlineSelectedLineIndex === null
+        ? undefined
+        : inlineDraftIssues.get(inlineSelectedLineIndex)
+    return (
+      <section className="generated-timeline-editor" data-generated-inline-editor>
+        <div className="generated-timeline-editor__actions">
+          <strong>줄별 timestamp 편집</strong>
+          <div>
+            <button
+              type="button"
+              className="button button--primary"
+              data-generated-inline-save
+              disabled={Boolean(inlineTimestampInputError || inlineDraftIssues.size)}
+              onClick={() => void saveInlineGeneratedEditing()}
+            >
+              저장
+            </button>
+            <button
+              type="button"
+              className="button"
+              data-generated-inline-cancel
+              onClick={cancelInlineGeneratedEditing}
+            >
+              취소
+            </button>
+          </div>
+        </div>
+        {inlineSelectedLineIndex === null ? (
+          <p>가사 줄을 선택해 timestamp를 수정하세요.</p>
+        ) : (
+          <>
+            <strong>
+              선택 줄 {inlineSelectedLineIndex + 1}: {plainLines[inlineSelectedLineIndex]}
+            </strong>
+            <label className="generated-timeline-editor__input">
+              timestamp
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="mm:ss.SSS"
+                value={inlineTimestampInput}
+                onChange={(event) => updateInlineTimestampInput(event.target.value)}
+              />
+            </label>
+            <div className="generated-timeline-editor__controls">
+              <button
+                type="button"
+                className="generated-timeline-editor__control"
+                data-generated-inline-current
+                onClick={setInlineGeneratedToCurrentTime}
+              >
+                현재 재생 위치로 지정
+              </button>
+              <button
+                type="button"
+                className="generated-timeline-editor__control"
+                data-generated-inline-play
+                disabled={!selectedTiming}
+                onClick={() =>
+                  selectedTiming &&
+                  usePlayerStore
+                    .getState()
+                    .seek(selectedTiming.audioTimeMs / 1_000)
+                }
+              >
+                이 시간부터 재생
+              </button>
+              {[-500, -100, 100, 500].map((delta) => (
+                <button
+                  type="button"
+                  key={delta}
+                  className="generated-timeline-editor__control"
+                  data-generated-inline-adjust={delta}
+                  disabled={!selectedTiming}
+                  onClick={() => adjustInlineGeneratedTiming(delta)}
+                >
+                  {delta > 0 ? '+' : ''}
+                  {delta / 1_000}초
+                </button>
+              ))}
+              <button
+                type="button"
+                className="generated-timeline-editor__control generated-timeline-editor__control--danger"
+                data-generated-inline-delete
+                disabled={!selectedTiming}
+                onClick={deleteInlineGeneratedTiming}
+              >
+                timestamp 삭제
+              </button>
+              <button
+                type="button"
+                className="generated-timeline-editor__control"
+                data-generated-inline-clear-selection
+                onClick={() => setInlineSelectedLineIndex(null)}
+              >
+                선택 해제
+              </button>
+            </div>
+          </>
+        )}
+        {(inlineTimestampInputError || selectedIssue || inlineSaveError) && (
+          <p className="generated-timeline-editor__error" role="alert">
+            {inlineTimestampInputError || selectedIssue || inlineSaveError}
+          </p>
+        )}
+        {inlineDraftIssues.size > 0 && (
+          <p className="generated-timeline-editor__error" role="alert">
+            시간 순서 또는 오디오 범위를 벗어난 줄이 있어 저장할 수 없습니다.
+          </p>
+        )}
+      </section>
+    )
   }
 
   if (!lyrics) return <div className="lyrics-loading">가사를 불러오는 중…</div>
@@ -810,6 +1278,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
           onApply={() => void applyAutoSync()}
           onDiscard={() => void discardAutoSync()}
         />
+        {renderSyncEditor()}
         {generatedTimelineState.timeline && !generatedTimelineState.valid && (
           <p className="lyrics-sync-unavailable" role="alert">
             저장된 AI 타임라인과 현재 가사의 줄 또는 텍스트가 달라 적용하지
@@ -827,16 +1296,29 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
                   : 'AI 줄별 타임라인 미적용'}
             </span>
             {generatedTimelineState.timeline && !autoSyncPreviewTimeline && (
-              <button
-                type="button"
-                data-generated-timeline-reset
-                onClick={() => void resetGeneratedTimeline()}
-              >
-                초기화
-              </button>
+              <div className="generated-timeline-status-actions">
+                <button
+                  type="button"
+                  data-generated-timeline-reset
+                  onClick={() => void resetGeneratedTimeline()}
+                >
+                  초기화
+                </button>
+                {!inlineGeneratedEditing && (
+                  <button
+                    type="button"
+                    data-generated-timeline-edit
+                    disabled={!generatedTimelineState.valid || syncEditing}
+                    onClick={startInlineGeneratedEditing}
+                  >
+                    편집
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
+        {renderInlineGeneratedEditor()}
         {activeGeneratedTimeline ? (
           generatedLines.map((line, index) => (
             <button
@@ -845,18 +1327,59 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
               ref={(element) => {
                 lineRefs.current[index] = element
               }}
-              className={index === activeIndex ? 'is-active' : ''}
+              className={`${index === activeIndex ? 'is-active ' : ''}${inlineSelectedLineIndex === index ? 'is-selected' : ''}`}
               data-generated-line-index={index}
               data-generated-line-timed={line.timing ? 'true' : 'false'}
-              disabled={!line.timing}
+              data-generated-line-source={
+                generatedTimingSourceByLine.get(index) ??
+                autoSyncLineTimingByLine.get(index)?.source ??
+                'unmatched'
+              }
+              disabled={
+                !line.timing &&
+                !editingGeneratedTimeline &&
+                !inlineGeneratedEditing
+              }
               onClick={() => {
-                if (line.timing)
+                if (inlineGeneratedEditing) selectInlineGeneratedLine(index)
+                else if (editingGeneratedTimeline) setSelectedLineIndex(index)
+                else if (line.timing)
+                  usePlayerStore
+                    .getState()
+                    .seek(line.timing.audioTimeMs / 1_000)
+              }}
+              onDoubleClick={() => {
+                if (inlineGeneratedEditing && line.timing)
                   usePlayerStore
                     .getState()
                     .seek(line.timing.audioTimeMs / 1_000)
               }}
             >
-              {line.text}
+              {inlineGeneratedEditing && (
+                <span className="generated-lyric-line__timing">
+                  {line.timing
+                    ? formatGeneratedTimestamp(line.timing.audioTimeMs)
+                    : '--:--.---'}
+                </span>
+              )}
+              <span className="generated-lyric-line__text">{line.text}</span>
+              {inlineGeneratedEditing && (
+                <small
+                  className="generated-lyric-line__source"
+                  title={formatGeneratedTimingSource(
+                    generatedTimingSourceByLine.get(index) ??
+                      autoSyncLineTimingByLine.get(index)?.source ??
+                      'unmatched',
+                  )}
+                >
+                  {formatGeneratedTimingSource(
+                    generatedTimingSourceByLine.get(index) ??
+                      autoSyncLineTimingByLine.get(index)?.source ??
+                      'unmatched',
+                  )}
+                  {inlineDraftIssues.get(index) && ' · 시간 오류'}
+                </small>
+              )}
             </button>
           ))
         ) : (
@@ -1120,6 +1643,14 @@ function LyricsAutoSyncControls({
   const result = job?.status === 'completed' ? job.result : undefined
   const hasSupportedLyrics = hasTimedLyrics || hasPlainLyrics
   const generatedResult = Boolean(result?.generatedLyricsTimeline)
+  const previewTimestampCount = result
+    ? result.lineTimings.filter((line) => line.audioTimeMs !== null).length ||
+      result.generatedLyricsTimeline?.lines.length ||
+      result.lyricsSyncProfile.anchors.length
+    : 0
+  const canOpenEditor = Boolean(
+    result && !running && !starting && !manualEditing && previewTimestampCount > 0,
+  )
   const overallProgress = autoSyncProgressPercent(job?.overallProgress ?? null)
   const stageProgress = autoSyncProgressPercent(job?.stageProgress ?? null)
   const elapsedMs = job
@@ -1414,7 +1945,8 @@ function LyricsAutoSyncControls({
               type="button"
               className="button"
               data-auto-sync-edit
-              disabled={generatedResult || !hasTimedLyrics || manualEditing}
+              data-auto-sync-editable-timestamps={previewTimestampCount}
+              disabled={!canOpenEditor}
               onClick={onOpenEditor}
             >
               수동 싱크 편집기로 열기
@@ -1532,6 +2064,111 @@ function autoSyncProfile(result: AutoSyncResult): LyricsSyncProfile {
       processingTimeMs: result.processingTimeMs,
     },
   }
+}
+
+function generatedTimelineFromAutoSyncResult(
+  result: AutoSyncResult,
+  lines: string[],
+): GeneratedLyricsTimeline {
+  const fallbackTimings = result.generatedLyricsTimeline?.lines ?? []
+  const previewTimings = result.lineTimings.length
+    ? result.lineTimings
+        .filter(
+          (line) =>
+            line.audioTimeMs !== null &&
+            line.lineIndex >= 0 &&
+            line.lineIndex < lines.length,
+        )
+        .map((line) => ({
+          lineIndex: line.lineIndex,
+          textHash: generatedLyricsLineHash(lines[line.lineIndex]),
+          audioTimeMs: line.audioTimeMs!,
+          confidence: line.confidence,
+          source: line.source,
+        }))
+    : fallbackTimings
+  return {
+    trackId: result.trackId,
+    source: 'ai',
+    lines: previewTimings.sort((left, right) => left.lineIndex - right.lineIndex),
+    lineCount: lines.length,
+    lyricsTextHash: generatedLyricsTextHash(lines.join('\n')),
+    model: result.generatedLyricsTimeline?.model,
+    createdAt: Date.now(),
+  }
+}
+
+function formatGeneratedTimestamp(milliseconds: number): string {
+  const totalMilliseconds = Math.max(0, Math.round(milliseconds))
+  const minutes = Math.floor(totalMilliseconds / 60_000)
+  const seconds = Math.floor((totalMilliseconds % 60_000) / 1_000)
+  const remainder = totalMilliseconds % 1_000
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(remainder).padStart(3, '0')}`
+}
+
+function parseGeneratedTimestamp(value: string): number | null {
+  const match = /^(\d+):([0-5]\d)\.(\d{3})$/.exec(value.trim())
+  if (!match) return null
+  const milliseconds =
+    Number(match[1]) * 60_000 + Number(match[2]) * 1_000 + Number(match[3])
+  return Number.isSafeInteger(milliseconds) ? milliseconds : null
+}
+
+function validateGeneratedTimelineDraft(
+  timeline: GeneratedLyricsTimeline | null,
+  durationSeconds: number | null,
+): Map<number, string> {
+  const issues = new Map<number, string>()
+  if (!timeline) return issues
+  const maximumMs =
+    durationSeconds !== null && Number.isFinite(durationSeconds) && durationSeconds > 0
+      ? Math.round(durationSeconds * 1_000)
+      : null
+  let previousValidTimeMs: number | null = null
+  for (const line of [...timeline.lines].sort(
+    (left, right) => left.lineIndex - right.lineIndex,
+  )) {
+    if (!Number.isInteger(line.audioTimeMs) || line.audioTimeMs < 0) {
+      issues.set(line.lineIndex, '음수 timestamp는 사용할 수 없습니다.')
+      continue
+    }
+    if (maximumMs !== null && line.audioTimeMs > maximumMs) {
+      issues.set(line.lineIndex, '오디오 길이를 초과했습니다.')
+      continue
+    }
+    if (
+      previousValidTimeMs !== null &&
+      line.audioTimeMs <= previousValidTimeMs
+    ) {
+      issues.set(line.lineIndex, '이전 유효 줄보다 늦어야 합니다.')
+      continue
+    }
+    previousValidTimeMs = line.audioTimeMs
+  }
+  return issues
+}
+
+function generatedTimelineSignature(timeline: GeneratedLyricsTimeline): string {
+  return JSON.stringify({
+    trackId: timeline.trackId,
+    source: timeline.source,
+    lines: [...timeline.lines].sort((left, right) => left.lineIndex - right.lineIndex),
+    lineCount: timeline.lineCount,
+    lyricsTextHash: timeline.lyricsTextHash,
+    model: timeline.model,
+  })
+}
+
+function formatGeneratedTimingSource(source: string): string {
+  const labels: Record<string, string> = {
+    direct: '직접 매칭',
+    segment_recovered: 'segment 복구',
+    interpolated: '보간',
+    local_retry: '국소 재시도',
+    unmatched: '미매칭',
+    manual: '수동 수정',
+  }
+  return labels[source] ?? source
 }
 
 function autoSyncProgressPercent(value: number | null) {

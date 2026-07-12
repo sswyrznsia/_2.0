@@ -1126,6 +1126,44 @@ try {
   )
   if (beforePlainPreview.timeline !== null)
     throw new Error('Plain-only result persisted before explicit apply')
+  const plainEditorAvailability = await cdp.evaluate(`(() => ({
+    editDisabled: document.querySelector('[data-auto-sync-edit]')?.disabled,
+    applyDisabled: document.querySelector('[data-auto-sync-apply]')?.disabled,
+    timestampCount: Number(document.querySelector('[data-auto-sync-edit]')?.getAttribute('data-auto-sync-editable-timestamps')),
+  }))()`)
+  if (
+    plainEditorAvailability.editDisabled ||
+    plainEditorAvailability.timestampCount !== 4
+  )
+    throw new Error(
+      `Plain preview manual editor should accept low-confidence timestamps: ${JSON.stringify(plainEditorAvailability)}`,
+    )
+  await cdp.evaluate('document.querySelector("[data-auto-sync-edit]").click()')
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector("[data-generated-sync-editor]"))'),
+    'plain-only generated timeline editor',
+  )
+  const generatedEditorInitialState = await cdp.evaluate(`(() => ({
+    lowConfidenceTimed: document.querySelector('[data-generated-line-index="1"]')?.getAttribute('data-generated-line-timed'),
+    unmatchedTimed: document.querySelector('[data-generated-line-index="4"]')?.getAttribute('data-generated-line-timed'),
+    unmatchedDisabled: document.querySelector('[data-generated-line-index="4"]')?.disabled,
+  }))()`)
+  if (
+    generatedEditorInitialState.lowConfidenceTimed !== 'true' ||
+    generatedEditorInitialState.unmatchedTimed !== 'false' ||
+    generatedEditorInitialState.unmatchedDisabled
+  )
+    throw new Error(
+      `Generated editor did not retain preview timestamps and blank unmatched lines: ${JSON.stringify(generatedEditorInitialState)}`,
+    )
+  const whilePlainEditing = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
+  )
+  if (whilePlainEditing.timeline !== null)
+    throw new Error('Opening the generated timeline editor unexpectedly persisted it')
+  await cdp.evaluate(
+    'document.querySelector("[data-generated-sync-editor] .button:not(.button--primary)").click()',
+  )
   await cdp.evaluate(
     'document.querySelector("[data-auto-sync-preview]").click()',
   )
@@ -1218,6 +1256,200 @@ try {
         `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}').then((state) => state.valid && state.timeline?.lines.length === 3)`,
       ),
     'plain-only generated timeline persistence',
+  )
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector("[data-generated-timeline-edit]"))'),
+    'inline generated timeline edit button',
+  )
+  await cdp.evaluate('document.querySelector("[data-generated-timeline-edit]").click()')
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector("[data-generated-inline-editor]"))'),
+    'inline generated timeline editor',
+  )
+  await cdp.evaluate(`document.querySelector('[data-generated-line-index="2"]').click()`)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="2"]')?.classList.contains('is-selected')`,
+      ),
+    'selected inline generated line two',
+  )
+  const timestampControlVisual = await cdp.evaluate(`(() => {
+    const current = document.querySelector('[data-generated-inline-current]')
+    const remove = document.querySelector('[data-generated-inline-delete]')
+    current.focus()
+    const currentStyle = getComputedStyle(current)
+    const removeStyle = getComputedStyle(remove)
+    const rect = current.getBoundingClientRect()
+    return {
+      currentBackground: currentStyle.backgroundColor,
+      currentColor: currentStyle.color,
+      currentBorder: currentStyle.borderColor,
+      focusOutline: currentStyle.outlineColor,
+      removeBackground: removeStyle.backgroundColor,
+      removeColor: removeStyle.color,
+      removeBorder: removeStyle.borderColor,
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    }
+  })()`)
+  if (
+    timestampControlVisual.currentBackground !== 'rgb(24, 35, 61)' ||
+    timestampControlVisual.currentColor !== 'rgb(244, 247, 255)' ||
+    timestampControlVisual.currentBorder !== 'rgb(53, 70, 111)' ||
+    timestampControlVisual.focusOutline !== 'rgb(120, 162, 255)' ||
+    timestampControlVisual.removeBackground !== 'rgb(53, 28, 42)' ||
+    timestampControlVisual.removeColor !== 'rgb(255, 215, 225)' ||
+    timestampControlVisual.removeBorder !== 'rgb(113, 54, 76)'
+  )
+    throw new Error(
+      `Timestamp control contrast is incorrect: ${JSON.stringify(timestampControlVisual)}`,
+    )
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: timestampControlVisual.x,
+    y: timestampControlVisual.y,
+  })
+  await delay(50)
+  const timestampControlHover = await cdp.evaluate(
+    `getComputedStyle(document.querySelector('[data-generated-inline-current]')).backgroundColor`,
+  )
+  if (timestampControlHover !== 'rgb(34, 52, 92)')
+    throw new Error(`Timestamp control hover contrast is incorrect: ${timestampControlHover}`)
+  const setInlineInput = async (value) =>
+    cdp.evaluate(`(() => {
+      const input = document.querySelector('[data-generated-inline-editor] input')
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter.call(input, ${JSON.stringify(value)})
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+  await setInlineInput('00:00.500')
+  const reverseInlineState = await cdp.evaluate(`(() => ({
+    saveDisabled: document.querySelector('[data-generated-inline-save]')?.disabled,
+    lineError: document.querySelector('[data-generated-inline-editor] [role=alert]')?.textContent,
+  }))()`)
+  if (!reverseInlineState.saveDisabled || !reverseInlineState.lineError)
+    throw new Error(
+      `Inline editor did not block reverse timestamp saving: ${JSON.stringify(reverseInlineState)}`,
+    )
+  await setInlineInput('99:59.999')
+  const outOfRangeInlineState = await cdp.evaluate(
+    `document.querySelector('[data-generated-inline-save]')?.disabled`,
+  )
+  if (!outOfRangeInlineState)
+    throw new Error('Inline editor did not block out-of-range timestamp saving')
+  await cdp.evaluate(`document.querySelector('[data-generated-line-index="1"]').click()`)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="1"]')?.classList.contains('is-selected')`,
+      ),
+    'selected inline generated unmatched line',
+  )
+  const disabledTimestampControl = await cdp.evaluate(`(() => {
+    const button = document.querySelector('[data-generated-inline-delete]')
+    const style = getComputedStyle(button)
+    return {
+      disabled: button.disabled,
+      background: style.backgroundColor,
+      color: style.color,
+      border: style.borderColor,
+      opacity: style.opacity,
+      cursor: style.cursor,
+    }
+  })()`)
+  if (
+    !disabledTimestampControl.disabled ||
+    disabledTimestampControl.background !== 'rgb(21, 29, 48)' ||
+    disabledTimestampControl.color !== 'rgb(127, 138, 168)' ||
+    disabledTimestampControl.border !== 'rgb(41, 52, 79)' ||
+    disabledTimestampControl.opacity !== '0.7' ||
+    disabledTimestampControl.cursor !== 'not-allowed'
+  )
+    throw new Error(
+      `Disabled timestamp control contrast is incorrect: ${JSON.stringify(disabledTimestampControl)}`,
+    )
+  await cdp.evaluate(`(() => {
+    document.querySelector('[data-generated-inline-current]').click()
+  })()`)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="1"]')?.getAttribute('data-generated-line-timed') === 'true'`,
+      ),
+    'new inline generated timestamp',
+  )
+  await cdp.evaluate(`document.querySelector('[data-generated-inline-delete]').click()`)
+  const deletedInlineTiming = await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="1"]')?.getAttribute('data-generated-line-timed') === 'false'`,
+      ),
+    'deleted inline generated timestamp',
+  )
+  if (!deletedInlineTiming)
+    throw new Error('Inline editor did not delete a generated timestamp')
+  await cdp.evaluate('document.querySelector("[data-generated-inline-cancel]").click()')
+  const afterInlineCancel = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
+  )
+  if (afterInlineCancel.timeline?.lines.length !== 3)
+    throw new Error('Cancelling inline generated editing unexpectedly persisted changes')
+
+  await seekPlayer(cdp, 10)
+  await cdp.evaluate(`document.querySelector('[data-generated-timeline-edit]').click()`)
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector("[data-generated-inline-editor]"))'),
+    'reopened inline generated timeline editor',
+  )
+  await cdp.evaluate(`document.querySelector('[data-generated-line-index="1"]').click()`)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="1"]')?.classList.contains('is-selected')`,
+      ),
+    'selected inline generated line one for save',
+  )
+  await cdp.evaluate(`document.querySelector('[data-generated-inline-current]').click()`)
+  await cdp.evaluate(`document.querySelector('[data-generated-line-index="2"]').click()`)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="2"]')?.classList.contains('is-selected')`,
+      ),
+    'selected inline generated line two for save',
+  )
+  await cdp.evaluate(`document.querySelector('[data-generated-inline-adjust="500"]').click()`)
+  await setInlineInput('00:21.300')
+  const inlineDraftState = await cdp.evaluate(`(() => ({
+    lineOneTimed: document.querySelector('[data-generated-line-index="1"]')?.getAttribute('data-generated-line-timed'),
+    lineOneSource: document.querySelector('[data-generated-line-index="1"]')?.getAttribute('data-generated-line-source'),
+    lineTwoSource: document.querySelector('[data-generated-line-index="2"]')?.getAttribute('data-generated-line-source'),
+    saveDisabled: document.querySelector('[data-generated-inline-save]')?.disabled,
+  }))()`)
+  if (
+    inlineDraftState.lineOneTimed !== 'true' ||
+    inlineDraftState.lineOneSource !== 'manual' ||
+    inlineDraftState.lineTwoSource !== 'manual' ||
+    inlineDraftState.saveDisabled
+  )
+    throw new Error(
+      `Inline editor did not retain draft timing and manual sources: ${JSON.stringify(inlineDraftState)}`,
+    )
+  await cdp.evaluate('document.querySelector("[data-generated-inline-save]").click()')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}').then((state) => state.valid && state.timeline?.lines.length === 4)`,
+      ),
+    'inline generated timeline save',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="1"]')?.classList.contains('is-active')`,
+      ),
+    'active generated line after inline save',
   )
   await clickCoverByTitle(cdp, 'Candidate Song')
   await waitFor(
@@ -1399,7 +1631,11 @@ try {
   )
   if (
     !restartedGeneratedTimeline.valid ||
-    restartedGeneratedTimeline.timeline?.lines.length !== 3
+    restartedGeneratedTimeline.timeline?.lines.length !== 4 ||
+    restartedGeneratedTimeline.timeline?.lines.find((line) => line.lineIndex === 1)
+      ?.source !== 'manual' ||
+    restartedGeneratedTimeline.timeline?.lines.find((line) => line.lineIndex === 2)
+      ?.source !== 'manual'
   )
     throw new Error(
       `Generated timeline did not persist after restart: ${JSON.stringify(restartedGeneratedTimeline)}`,
@@ -1462,6 +1698,94 @@ try {
       ),
     'timed lyrics after app restart',
   )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector("[data-auto-sync-trigger]") && !document.querySelector("[data-auto-sync-trigger]")?.disabled',
+      ),
+    'low-quality synced auto-sync availability',
+  )
+  await cdp.evaluate('document.querySelector("[data-auto-sync-trigger]").click()')
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector("[data-auto-sync-confirmation]"))'),
+    'low-quality synced auto-sync confirmation',
+  )
+  await cdp.evaluate('document.querySelector("[data-auto-sync-confirm-start]").click()')
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector("[data-auto-sync-result]"))'),
+    'low-quality synced auto-sync result',
+  )
+  const lowQualityEditorAvailability = await cdp.evaluate(`(() => ({
+    quality: document.querySelector('[data-auto-sync-result]')?.getAttribute('data-auto-sync-quality'),
+    editDisabled: document.querySelector('[data-auto-sync-edit]')?.disabled,
+    applyDisabled: document.querySelector('[data-auto-sync-apply]')?.disabled,
+    timestampCount: Number(document.querySelector('[data-auto-sync-edit]')?.getAttribute('data-auto-sync-editable-timestamps')),
+  }))()`)
+  if (
+    lowQualityEditorAvailability.quality !== 'low' ||
+    lowQualityEditorAvailability.editDisabled ||
+    !lowQualityEditorAvailability.applyDisabled ||
+    lowQualityEditorAvailability.timestampCount !== 2
+  )
+    throw new Error(
+      `Low-quality preview did not separate apply from manual editing: ${JSON.stringify(lowQualityEditorAvailability)}`,
+    )
+  await cdp.evaluate('document.querySelector("[data-auto-sync-edit]").click()')
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-sync-editor"))'),
+    'low-quality synced editor',
+  )
+  await cdp.evaluate(
+    'document.querySelector(".lyrics-sync-editor .button:not(.button--primary)").click()',
+  )
+  await cdp.evaluate('document.querySelector("[data-auto-sync-discard]").click()')
+  await cdp.evaluate(`window.electronAPI.saveLyricsSelection('${trackCId}', {
+    id: 904,
+    trackName: 'Square Track',
+    artistName: 'Square Artist',
+    syncedLyrics: '[00:00.00]Zero one\\n[00:01.00]Zero two',
+    plainLyrics: 'Zero one\\nZero two',
+    instrumental: false,
+    provider: 'lrclib',
+    sourceLabel: 'LRCLIB',
+  })`)
+  await clickCoverByTitle(cdp, 'Candidate Song')
+  await clickCoverByTitle(cdp, 'Square Track')
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-synced"))'),
+    'zero-timestamp synced lyrics',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector("[data-auto-sync-trigger]") && !document.querySelector("[data-auto-sync-trigger]")?.disabled',
+      ),
+    'zero-timestamp auto-sync availability',
+  )
+  await cdp.evaluate('document.querySelector("[data-auto-sync-trigger]").click()')
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector("[data-auto-sync-confirmation]"))'),
+    'zero-timestamp auto-sync confirmation',
+  )
+  await cdp.evaluate('document.querySelector("[data-auto-sync-confirm-start]").click()')
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector("[data-auto-sync-result]"))'),
+    'zero-timestamp auto-sync result',
+  )
+  const zeroTimestampEditorAvailability = await cdp.evaluate(`(() => ({
+    editDisabled: document.querySelector('[data-auto-sync-edit]')?.disabled,
+    applyDisabled: document.querySelector('[data-auto-sync-apply]')?.disabled,
+    timestampCount: Number(document.querySelector('[data-auto-sync-edit]')?.getAttribute('data-auto-sync-editable-timestamps')),
+  }))()`)
+  if (
+    !zeroTimestampEditorAvailability.editDisabled ||
+    !zeroTimestampEditorAvailability.applyDisabled ||
+    zeroTimestampEditorAvailability.timestampCount !== 0
+  )
+    throw new Error(
+      `Zero-timestamp preview should keep the manual editor unavailable: ${JSON.stringify(zeroTimestampEditorAvailability)}`,
+    )
+  await cdp.evaluate('document.querySelector("[data-auto-sync-discard]").click()')
   await clickCoverByTitle(cdp, 'Candidate Song')
   await waitFor(
     () =>

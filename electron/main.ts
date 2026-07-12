@@ -1472,6 +1472,16 @@ function registerIpc() {
           textHash: z.string().regex(/^[a-f0-9]{16}$/),
           audioTimeMs: z.number().int().nonnegative(),
           confidence: z.number().finite().min(0).max(1).optional(),
+          source: z
+            .enum([
+              'direct',
+              'segment_recovered',
+              'interpolated',
+              'local_retry',
+              'unmatched',
+              'manual',
+            ])
+            .optional(),
         }),
       )
       .max(20_000),

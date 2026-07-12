@@ -42,7 +42,10 @@
         "lyricTimeMs": { "type": "integer", "minimum": 0 },
         "audioTimeMs": { "type": "integer", "minimum": 0 },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-        "whisperText": { "type": "string" }
+        "whisperText": { "type": "string" },
+        "source": {
+          "enum": ["direct", "segment_recovered", "interpolated", "local_retry"]
+        }
       }
     },
     "wordToken": {
@@ -151,6 +154,29 @@
           "type": "array",
           "uniqueItems": true,
           "items": { "type": "integer", "minimum": 0 }
+        },
+        "timingSegments": { "type": "array" },
+        "interpolatedLines": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "localRetryRequests": { "type": "array" },
+        "lineTimings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["lineIndex", "source", "confidence", "audioTimeMs"],
+            "properties": {
+              "lineIndex": { "type": "integer", "minimum": 0 },
+              "source": {
+                "enum": ["direct", "segment_recovered", "interpolated", "local_retry", "unmatched"]
+              },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "audioTimeMs": { "type": ["integer", "null"], "minimum": 0 }
+            }
+          }
         }
       }
     },

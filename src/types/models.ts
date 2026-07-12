@@ -134,6 +134,7 @@ export interface GeneratedLyricsLineTiming {
   textHash: string
   audioTimeMs: number
   confidence?: number
+  source?: AutoSyncTimingSource | 'manual'
 }
 
 export interface GeneratedLyricsTimeline {
@@ -196,6 +197,21 @@ export interface AutoSyncAvailability {
 export interface AutoSyncLineConfidence {
   lineIndex: number
   confidence: number
+  source?: AutoSyncTimingSource
+}
+
+export type AutoSyncTimingSource =
+  | 'direct'
+  | 'segment_recovered'
+  | 'interpolated'
+  | 'local_retry'
+  | 'unmatched'
+
+export interface AutoSyncLineTiming {
+  lineIndex: number
+  source: AutoSyncTimingSource
+  confidence: number
+  audioTimeMs: number | null
 }
 
 export interface AutoSyncResult {
@@ -213,6 +229,7 @@ export interface AutoSyncResult {
   unmatchedLines: number[]
   temporalOutlierLines: number[]
   lowConfidenceLines: AutoSyncLineConfidence[]
+  lineTimings: AutoSyncLineTiming[]
   processingTimeMs: number
   peakGpuMemoryMiB: number | null
   canApply: boolean
