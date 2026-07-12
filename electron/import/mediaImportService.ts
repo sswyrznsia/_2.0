@@ -30,7 +30,15 @@ import { ImportQueue } from './importQueue'
 import { classifyToolError, MediaImportError } from './importErrors'
 import type { ImportMetadata, QueuedImport } from './importTypes'
 
-const SUPPORTED_EXTENSIONS = new Set(['mp3', 'flac', 'wav', 'm4a', 'ogg'])
+const SUPPORTED_EXTENSIONS = new Set([
+  'mp3',
+  'flac',
+  'wav',
+  'm4a',
+  'aac',
+  'ogg',
+  'opus',
+])
 const MAX_TOOL_OUTPUT = 10 * 1024 * 1024
 const MAX_COVER_BYTES = 15 * 1024 * 1024
 const MAX_MEDIA_BYTES = 5 * 1024 * 1024 * 1024

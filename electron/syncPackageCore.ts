@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type {
-  PulseShelfSyncPackageV1,
+  PulseShelfSyncPackage,
   SyncConflictKind,
   SyncConflictPreview,
   SyncImportTrackChoice,
@@ -10,11 +10,14 @@ import type {
   SyncTrackIdentity,
   SyncTrackPreview,
   SyncTrackRecord,
+  SyncTrackRecordV2,
   TrackLyrics,
 } from '../src/types/models'
 import { appDataSchema, type StoredAppData, type StoredTrack } from './data'
 
 export const SYNC_PACKAGE_MAX_BYTES = 20 * 1024 * 1024
+export const SYNC_PACKAGE_V2_MAX_BYTES = 20 * 1024 * 1024 * 1024
+export const SYNC_PACKAGE_MEDIA_MAX_BYTES = 4 * 1024 * 1024 * 1024
 const hash64 = z.string().regex(/^[a-f0-9]{64}$/)
 
 const identitySchema = z
@@ -69,6 +72,10 @@ const exportOptionsSchema = z
   })
   .strict()
 
+const exportOptionsV2Schema = exportOptionsSchema
+  .extend({ mediaFiles: z.boolean() })
+  .strict()
+
 const trackRecordSchema = z
   .object({
     recordId: z.string().uuid(),
@@ -88,6 +95,40 @@ const trackRecordSchema = z
   })
   .strict()
 
+const mediaDescriptorSchema = z
+  .object({
+    archivePath: z.string().min(1).max(1_000),
+    originalFileName: z.string().min(1).max(500),
+    extension: z.enum(['mp3', 'flac', 'wav', 'm4a', 'aac', 'ogg', 'opus']),
+    size: z.number().int().positive().max(SYNC_PACKAGE_MEDIA_MAX_BYTES),
+    sha256: hash64,
+    mimeType: z.string().trim().min(1).max(100).optional(),
+  })
+  .strict()
+
+const artworkDescriptorSchema = z
+  .object({
+    archivePath: z.string().min(1).max(1_000),
+    extension: z.enum(['jpg', 'png']),
+    size: z
+      .number()
+      .int()
+      .positive()
+      .max(15 * 1024 * 1024),
+    sha256: hash64,
+  })
+  .strict()
+
+const trackRecordV2Schema = trackRecordSchema
+  .extend({
+    media: mediaDescriptorSchema.optional(),
+    artwork: artworkDescriptorSchema.optional(),
+    mediaWarning: z
+      .enum(['missing', 'unreadable', 'unsupported', 'too-large'])
+      .optional(),
+  })
+  .strict()
+
 const playlistRecordSchema = z
   .object({
     syncId: z.string().uuid(),
@@ -99,7 +140,45 @@ const playlistRecordSchema = z
   })
   .strict()
 
-export const syncPackageSchema = z
+function validatePackageDuplicates(
+  value: {
+    tracks: Array<{ recordId: string; identity: SyncTrackIdentity }>
+    playlists: Array<{ syncId: string }>
+  },
+  context: z.RefinementCtx,
+) {
+  const recordIds = new Set<string>()
+  const stableIdentities = new Set<string>()
+  for (const [index, record] of value.tracks.entries()) {
+    if (recordIds.has(record.recordId))
+      context.addIssue({
+        code: 'custom',
+        path: ['tracks', index, 'recordId'],
+        message: '중복된 트랙 recordId입니다.',
+      })
+    recordIds.add(record.recordId)
+    const key = primaryIdentityKey(record.identity)
+    if (key && stableIdentities.has(key))
+      context.addIssue({
+        code: 'custom',
+        path: ['tracks', index, 'identity'],
+        message: '중복된 안정 트랙 식별자입니다.',
+      })
+    if (key) stableIdentities.add(key)
+  }
+  const playlistIds = new Set<string>()
+  for (const [index, playlist] of value.playlists.entries()) {
+    if (playlistIds.has(playlist.syncId))
+      context.addIssue({
+        code: 'custom',
+        path: ['playlists', index, 'syncId'],
+        message: '중복된 플레이리스트 syncId입니다.',
+      })
+    playlistIds.add(playlist.syncId)
+  }
+}
+
+export const syncPackageV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     appVersion: z.string().trim().min(1).max(100),
@@ -110,37 +189,82 @@ export const syncPackageSchema = z
     exportOptions: exportOptionsSchema,
   })
   .strict()
-  .superRefine((value, context) => {
-    const recordIds = new Set<string>()
-    const stableIdentities = new Set<string>()
-    for (const [index, record] of value.tracks.entries()) {
-      if (recordIds.has(record.recordId))
-        context.addIssue({
-          code: 'custom',
-          path: ['tracks', index, 'recordId'],
-          message: '중복된 트랙 recordId입니다.',
-        })
-      recordIds.add(record.recordId)
-      const key = primaryIdentityKey(record.identity)
-      if (key && stableIdentities.has(key))
-        context.addIssue({
-          code: 'custom',
-          path: ['tracks', index, 'identity'],
-          message: '중복된 안정 트랙 식별자입니다.',
-        })
-      if (key) stableIdentities.add(key)
-    }
-    const playlistIds = new Set<string>()
-    for (const [index, playlist] of value.playlists.entries()) {
-      if (playlistIds.has(playlist.syncId))
-        context.addIssue({
-          code: 'custom',
-          path: ['playlists', index, 'syncId'],
-          message: '중복된 플레이리스트 syncId입니다.',
-        })
-      playlistIds.add(playlist.syncId)
-    }
+  .superRefine(validatePackageDuplicates)
+
+export const syncPackageV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    appVersion: z.string().trim().min(1).max(100),
+    exportedAt: z.number().finite().nonnegative(),
+    deviceId: z.string().uuid(),
+    tracks: z.array(trackRecordV2Schema).max(200_000),
+    playlists: z.array(playlistRecordSchema).max(5_000),
+    exportOptions: exportOptionsV2Schema,
   })
+  .strict()
+  .superRefine((value, context) => {
+    validatePackageDuplicates(value, context)
+    const archivePaths = new Set<string>()
+    let totalMediaBytes = 0
+    for (const [index, record] of value.tracks.entries()) {
+      for (const [kind, descriptor] of [
+        ['media', record.media],
+        ['artwork', record.artwork],
+      ] as const) {
+        if (!descriptor) continue
+        if (!isSafeArchivePath(descriptor.archivePath))
+          context.addIssue({
+            code: 'custom',
+            path: ['tracks', index, kind, 'archivePath'],
+            message: '안전하지 않은 archive 경로입니다.',
+          })
+        if (archivePaths.has(descriptor.archivePath))
+          context.addIssue({
+            code: 'custom',
+            path: ['tracks', index, kind, 'archivePath'],
+            message: '중복된 archive 경로입니다.',
+          })
+        archivePaths.add(descriptor.archivePath)
+        if (kind === 'media') {
+          totalMediaBytes += descriptor.size
+          if (
+            !descriptor.archivePath.startsWith(`media/${record.recordId}/`) ||
+            !descriptor.archivePath.endsWith(`.${descriptor.extension}`) ||
+            descriptor.originalFileName !==
+              descriptor.originalFileName.replace(/\\/g, '/').split('/').pop()
+          )
+            context.addIssue({
+              code: 'custom',
+              path: ['tracks', index, 'media'],
+              message: 'media descriptor 경로 또는 파일명이 올바르지 않습니다.',
+            })
+        } else if (
+          !descriptor.archivePath.startsWith('artwork/') ||
+          !descriptor.archivePath.endsWith(`.${descriptor.extension}`)
+        )
+          context.addIssue({
+            code: 'custom',
+            path: ['tracks', index, 'artwork'],
+            message: 'artwork descriptor 경로가 올바르지 않습니다.',
+          })
+      }
+    }
+    if (totalMediaBytes > SYNC_PACKAGE_V2_MAX_BYTES)
+      context.addIssue({
+        code: 'custom',
+        path: ['tracks'],
+        message: '패키지 미디어 총 용량이 20GB를 초과합니다.',
+      })
+  })
+
+export const syncPackageSchema = syncPackageV1Schema
+
+export function isSafeArchivePath(value: string): boolean {
+  if (!value || value.includes('\\') || value.includes('\0')) return false
+  if (value.startsWith('/') || /^[A-Za-z]:/.test(value)) return false
+  const parts = value.split('/')
+  return parts.every((part) => part && part !== '.' && part !== '..')
+}
 
 export function normalizeSyncText(value: string): string {
   return value
@@ -238,7 +362,7 @@ function withoutTrackId<T extends { trackId: string }>(
 }
 
 export function inspectSyncPackage(
-  packageValue: PulseShelfSyncPackageV1,
+  packageValue: PulseShelfSyncPackage,
   localData: StoredAppData,
   localIdentities: Map<string, SyncTrackIdentity>,
   token: string,
@@ -291,6 +415,21 @@ export function inspectSyncPackage(
       0,
     ),
     invalidEntries: 0,
+    schemaVersion: packageValue.schemaVersion,
+    mediaFiles:
+      packageValue.schemaVersion === 2
+        ? packageValue.tracks.filter((track) => Boolean(track.media)).length
+        : 0,
+    totalMediaBytes:
+      packageValue.schemaVersion === 2
+        ? packageValue.tracks.reduce(
+            (sum, track) => sum + (track.media?.size ?? 0),
+            0,
+          )
+        : 0,
+    creatableTracks: tracks.filter(
+      (track) => track.matchKind === 'missing' && track.mediaAvailable,
+    ).length,
   }
 }
 
@@ -316,7 +455,7 @@ function isFallbackCandidate(
 }
 
 function previewFor(
-  record: SyncTrackRecord,
+  record: SyncTrackRecord | SyncTrackRecordV2,
   matchKind: SyncTrackPreview['matchKind'],
   localTrack: StoredTrack | undefined,
   candidates: StoredTrack[],
@@ -328,6 +467,7 @@ function previewFor(
     record.generatedLyricsTimeline && 'AI/수동 타임라인',
     record.liked !== undefined && '좋아요',
     record.metadata && '메타데이터',
+    'media' in record && record.media && '음악 파일',
   ].filter((value): value is string => Boolean(value))
   return {
     recordId: record.recordId,
@@ -348,11 +488,14 @@ function previewFor(
     })),
     conflicts: localTrack ? conflictsFor(record, localTrack, data) : [],
     importedData,
+    mediaAvailable: 'media' in record && Boolean(record.media),
+    mediaSize: 'media' in record ? (record.media?.size ?? 0) : 0,
+    mediaWarning: 'mediaWarning' in record ? record.mediaWarning : undefined,
   }
 }
 
 function conflictsFor(
-  record: SyncTrackRecord,
+  record: SyncTrackRecord | SyncTrackRecordV2,
   track: StoredTrack,
   data: StoredAppData,
 ): SyncConflictPreview[] {
@@ -461,7 +604,7 @@ function sameValue(left: unknown, right: unknown): boolean {
 
 export function applySyncPackage(
   current: StoredAppData,
-  packageValue: PulseShelfSyncPackageV1,
+  packageValue: PulseShelfSyncPackage,
   inspection: SyncPackageInspection,
   plan: SyncPackageImportPlan,
 ): {

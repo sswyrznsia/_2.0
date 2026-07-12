@@ -1,12 +1,11 @@
 import { build } from 'vite'
-import { mkdtemp, rm } from 'node:fs/promises'
-import os from 'node:os'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const output = await mkdtemp(
-  path.join(os.tmpdir(), 'pulse-shelf-sync-package-'),
-)
+const outputRoot = path.join(process.cwd(), 'node_modules', '.tmp')
+await mkdir(outputRoot, { recursive: true })
+const output = await mkdtemp(path.join(outputRoot, 'pulse-shelf-sync-package-'))
 try {
   await build({
     configFile: false,

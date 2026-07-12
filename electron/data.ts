@@ -99,7 +99,7 @@ const publicTrackSchema = z.object({
   artist: z.string().max(500),
   album: z.string().max(500),
   duration: z.number().finite().nonnegative(),
-  format: z.enum(['mp3', 'flac', 'wav', 'm4a', 'ogg']),
+  format: z.enum(['mp3', 'flac', 'wav', 'm4a', 'aac', 'ogg', 'opus']),
   fileSize: z.number().int().nonnegative(),
   modifiedAt: z.number().nonnegative(),
   addedAt: z.number().nonnegative(),
@@ -463,7 +463,9 @@ function migrateData(value: unknown): unknown {
           'flac',
           'wav',
           'm4a',
+          'aac',
           'ogg',
+          'opus',
         ].includes(extension)
           ? (extension as MusicFormat)
           : 'mp3'
@@ -561,6 +563,7 @@ export function setStoredData(value: StoredAppData): StoredAppData {
 
 export async function setStoredDataWithImportBackup(
   value: StoredAppData,
+  existingBackupPath?: string,
 ): Promise<{ data: StoredAppData; backupPath: string }> {
   if (!store) throw new Error('Data store has not been initialized')
   const result = storedDataSchema.safeParse(value)
@@ -569,8 +572,7 @@ export async function setStoredDataWithImportBackup(
 
   const storePath = store.path
   const directory = path.dirname(storePath)
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const backupPath = path.join(directory, `pre-import-backup-${timestamp}.json`)
+  const backupPath = existingBackupPath ?? (await createPreImportBackup())
   const stagingPath = path.join(
     directory,
     `.sync-import-${process.pid}-${Date.now()}.tmp`,
@@ -583,13 +585,6 @@ export async function setStoredDataWithImportBackup(
     throw new Error('동기화 데이터의 임시 저장 검증에 실패했습니다.')
   }
 
-  if (existsSync(storePath)) await copyFile(storePath, backupPath)
-  else
-    await writeFile(
-      backupPath,
-      JSON.stringify({ data: getStoredData() }),
-      'utf8',
-    )
   try {
     // electron-store persists through an atomic temporary-file replacement.
     store.set('data', stagedResult.data.data)
@@ -600,6 +595,22 @@ export async function setStoredDataWithImportBackup(
     if (existsSync(backupPath)) await copyFile(backupPath, storePath)
     throw error
   }
+}
+
+export async function createPreImportBackup(): Promise<string> {
+  if (!store) throw new Error('Data store has not been initialized')
+  const storePath = store.path
+  const directory = path.dirname(storePath)
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backupPath = path.join(directory, `pre-import-backup-${timestamp}.json`)
+  if (existsSync(storePath)) await copyFile(storePath, backupPath)
+  else
+    await writeFile(
+      backupPath,
+      JSON.stringify({ data: getStoredData() }),
+      'utf8',
+    )
+  return backupPath
 }
 
 export function setPublicData(

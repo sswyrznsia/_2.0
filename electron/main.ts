@@ -1242,7 +1242,9 @@ async function fileResponse(
     flac: 'audio/flac',
     wav: 'audio/wav',
     m4a: 'audio/mp4',
+    aac: 'audio/aac',
     ogg: 'audio/ogg',
+    opus: 'audio/opus',
   }[track.format]
   const range = request.headers.get('range')
   let start = 0
@@ -1387,6 +1389,10 @@ function registerIpc() {
     assertMainSender(event)
     return syncPackageService.getStatus()
   })
+  ipcMain.handle(IPC.syncPackageEstimate, (event, options: unknown) => {
+    assertMainSender(event)
+    return syncPackageService.estimatePackage(options)
+  })
   ipcMain.handle(IPC.syncPackageExport, (event, options: unknown) => {
     assertMainSender(event)
     return syncPackageService.exportPackage(options)
@@ -1399,7 +1405,16 @@ function registerIpc() {
     assertMainSender(event)
     await autoSyncService?.cancelActiveAndDrain()
     await mediaImportService?.cancelAllAndDrain()
-    const result = await syncPackageService.importPackage(plan)
+    const result = await syncPackageService.importPackage(plan, {
+      currentTrackId: lastSnapshot?.currentTrack?.id,
+      currentTrackPlaying: lastSnapshot?.isPlaying,
+      stopCurrentTrack: async () => {
+        if (lastSnapshot?.isPlaying && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC.playerCommand, { type: 'toggle' })
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+      },
+    })
     if (result.data) {
       applySettings(result.data.settings)
       await mediaImportService?.initialize()

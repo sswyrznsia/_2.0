@@ -1,7 +1,14 @@
 export type RepeatMode = 'off' | 'one' | 'all'
 export type PageId =
   'home' | 'library' | 'youtube' | 'liked' | 'playlists' | 'focus' | 'settings'
-export type MusicFormat = 'mp3' | 'flac' | 'wav' | 'm4a' | 'ogg'
+export type MusicFormat =
+  | 'mp3'
+  | 'flac'
+  | 'wav'
+  | 'm4a'
+  | 'aac'
+  | 'ogg'
+  | 'opus'
 export type FocusTimerMode = 'focus' | 'break'
 export type FocusTimerStatus = 'idle' | 'running' | 'paused'
 
@@ -457,6 +464,23 @@ export interface SyncPackageExportOptions {
   playlists: boolean
   likes: boolean
   metadataOverrides: boolean
+  mediaFiles: boolean
+}
+
+export interface SyncMediaDescriptor {
+  archivePath: string
+  originalFileName: string
+  extension: MusicFormat
+  size: number
+  sha256: string
+  mimeType?: string
+}
+
+export interface SyncArtworkDescriptor {
+  archivePath: string
+  extension: 'jpg' | 'png'
+  size: number
+  sha256: string
 }
 
 export interface SyncTrackRecord {
@@ -489,8 +513,28 @@ export interface PulseShelfSyncPackageV1 {
   deviceId: string
   tracks: SyncTrackRecord[]
   playlists: SyncPlaylistRecord[]
+  exportOptions: Omit<SyncPackageExportOptions, 'mediaFiles'>
+}
+
+export interface SyncTrackRecordV2 extends SyncTrackRecord {
+  media?: SyncMediaDescriptor
+  artwork?: SyncArtworkDescriptor
+  mediaWarning?: 'missing' | 'unreadable' | 'unsupported' | 'too-large'
+}
+
+export interface PulseShelfSyncPackageV2 {
+  schemaVersion: 2
+  appVersion: string
+  exportedAt: number
+  deviceId: string
+  tracks: SyncTrackRecordV2[]
+  playlists: SyncPlaylistRecord[]
   exportOptions: SyncPackageExportOptions
 }
+
+export type PulseShelfSyncPackage =
+  | PulseShelfSyncPackageV1
+  | PulseShelfSyncPackageV2
 
 export type SyncTrackMatchKind = 'exact' | 'possible' | 'missing'
 export type SyncConflictKind =
@@ -520,6 +564,9 @@ export interface SyncTrackPreview {
   candidates: SyncMatchCandidate[]
   conflicts: SyncConflictPreview[]
   importedData: string[]
+  mediaAvailable: boolean
+  mediaSize: number
+  mediaWarning?: SyncTrackRecordV2['mediaWarning']
 }
 
 export interface SyncPackageInspection {
@@ -534,6 +581,10 @@ export interface SyncPackageInspection {
   missingTracks: number
   conflictCount: number
   invalidEntries: number
+  schemaVersion: 1 | 2
+  mediaFiles: number
+  totalMediaBytes: number
+  creatableTracks: number
 }
 
 export interface SyncPackageInspectResult {
@@ -547,6 +598,8 @@ export interface SyncImportTrackChoice {
   recordId: string
   localTrackId?: string
   conflicts?: Partial<Record<SyncConflictKind, 'local' | 'imported'>>
+  mediaAction?: 'keep' | 'replace' | 'create' | 'skip'
+  existingFileAction?: 'keep' | 'trash'
 }
 
 export interface SyncPackageImportPlan {
@@ -568,7 +621,23 @@ export interface SyncPackageOperationResult {
     likes: number
     playlists: number
     conflicts: number
+    createdTracks?: number
+    replacedMedia?: number
+    keptLocalMedia?: number
+    importedTimelines?: number
+    updatedMetadata?: number
+    unchangedItems?: number
+    skippedMissingMedia?: number
+    warnings?: string[]
   }
+}
+
+export interface SyncPackageEstimate {
+  totalTracks: number
+  mediaFiles: number
+  mediaBytes: number
+  excludedMedia: number
+  exceedsLimit: boolean
 }
 
 export interface SyncPackageStatus {

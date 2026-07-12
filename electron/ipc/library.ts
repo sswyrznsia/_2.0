@@ -34,7 +34,9 @@ const SUPPORTED_EXTENSIONS = new Set<MusicFormat>([
   'flac',
   'wav',
   'm4a',
+  'aac',
   'ogg',
+  'opus',
 ])
 const HASH_CHUNK_SIZE = 64 * 1024
 
@@ -64,6 +66,17 @@ async function acquireLibraryMutation(): Promise<() => void> {
   })
   await previous
   return release
+}
+
+export async function withLibraryMutation<T>(
+  work: () => Promise<T>,
+): Promise<T> {
+  const release = await acquireLibraryMutation()
+  try {
+    return await work()
+  } finally {
+    release()
+  }
 }
 
 export function cancelActiveScan() {

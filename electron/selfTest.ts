@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, unlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
@@ -22,6 +22,7 @@ import {
   trashTrackFile,
 } from './ipc/library'
 import { loadTrackLyrics } from './ipc/lyrics'
+import { SyncPackageService } from './ipc/syncPackage'
 import {
   computeTaskbarToggleBounds,
   computeTaskbarRect,
@@ -241,6 +242,175 @@ export async function runSelfTest(): Promise<SelfTestFixture> {
   if (!existsSync(atomicImport.backupPath))
     throw new Error('Pre-import backup was not created')
   process.stdout.write('PULSE_SHELF_SYNC_IMPORT_ATOMIC_OK\n')
+
+  const syncSource = getStoredData()
+  syncSource.tracks[0] = {
+    ...syncSource.tracks[0],
+    source: 'youtube',
+    sourceUrl: 'https://www.youtube.com/watch?v=BaW_jenozKc',
+    sourceVideoId: 'BaW_jenozKc',
+  }
+  syncSource.lyrics[track.id] = {
+    trackId: track.id,
+    source: 'manual-input',
+    plainLyrics: 'Portable sync lyrics',
+    fetchedAt: Date.now(),
+    userSelected: true,
+  }
+  setStoredData(syncSource)
+  const syncPackagePath = path.join(root, 'device-a-media.pssync')
+  const syncService = new SyncPackageService()
+  const exportedSync = await syncService.exportPackage(
+    {
+      lyrics: true,
+      playlists: true,
+      likes: true,
+      metadataOverrides: true,
+      mediaFiles: true,
+    },
+    syncPackagePath,
+  )
+  if (!exportedSync.success || !existsSync(syncPackagePath))
+    throw new Error('Media sync package export failed')
+  setStoredData({
+    ...syncSource,
+    musicFolders: [],
+    tracks: [],
+    playlists: [],
+    recentTrackIds: [],
+    lyrics: {},
+    lyricsSyncProfiles: {},
+    generatedLyricsTimelines: {},
+    playerSession: {
+      ...syncSource.playerSession,
+      queueIds: [],
+      currentIndex: -1,
+      currentTime: 0,
+    },
+  })
+  const inspectedSync = await syncService.inspectPackage(syncPackagePath)
+  if (!inspectedSync.success || !inspectedSync.inspection)
+    throw new Error('Media sync package inspection failed')
+  const importedSync = await syncService.importPackage({
+    token: inspectedSync.inspection.token,
+    tracks: inspectedSync.inspection.tracks.map((item) => ({
+      recordId: item.recordId,
+      mediaAction: item.mediaAvailable ? 'create' : 'skip',
+      existingFileAction: 'keep',
+    })),
+    likesMode: 'union',
+    playlistMode: 'newer',
+  })
+  const syncedData = getStoredData()
+  const syncedTrack = syncedData.tracks[0]
+  if (
+    !importedSync.success ||
+    importedSync.summary?.createdTracks !== 1 ||
+    !syncedTrack ||
+    !syncedTrack.filePath.startsWith(
+      path.join(app.getPath('userData'), 'synced-media'),
+    ) ||
+    !existsSync(syncedTrack.filePath) ||
+    !syncedTrack.liked ||
+    syncedData.lyrics[syncedTrack.id]?.plainLyrics !==
+      'Portable sync lyrics' ||
+    syncedData.playlists[0]?.trackIds[0] !== syncedTrack.id
+  )
+    throw new Error('Media sync package did not restore the portable library')
+  initializeStore()
+  if (getStoredData().tracks[0]?.id !== syncedTrack.id)
+    throw new Error('Imported media track did not survive store restart')
+
+  const syncReplacementPath = path.join(root, 'replacement.m4a')
+  const replacementContent = Buffer.alloc(32)
+  replacementContent.writeUInt32BE(32, 0)
+  replacementContent.write('ftyp', 4, 'ascii')
+  replacementContent.write('M4A ', 8, 'ascii')
+  await writeFile(syncReplacementPath, replacementContent)
+  const replacementStat = await stat(syncReplacementPath)
+  const replacementSource = structuredClone(syncSource)
+  replacementSource.tracks[0] = {
+    ...replacementSource.tracks[0],
+    filePath: syncReplacementPath,
+    fileName: 'replacement.m4a',
+    format: 'm4a',
+    fileSize: replacementStat.size,
+    modifiedAt: replacementStat.mtimeMs,
+  }
+  setStoredData(replacementSource)
+  const replacementPackagePath = path.join(root, 'device-a-replacement.pssync')
+  const exportedReplacement = await syncService.exportPackage(
+    {
+      lyrics: true,
+      playlists: true,
+      likes: true,
+      metadataOverrides: true,
+      mediaFiles: true,
+    },
+    replacementPackagePath,
+  )
+  if (!exportedReplacement.success)
+    throw new Error('Replacement media package export failed')
+  const localMp3Path = path.join(root, 'existing-local.mp3')
+  const localMp3Content = Buffer.concat([
+    Buffer.from('ID3', 'ascii'),
+    Buffer.alloc(29),
+  ])
+  await writeFile(localMp3Path, localMp3Content)
+  const localMp3Stat = await stat(localMp3Path)
+  const replacementTargetData = structuredClone(syncedData)
+  replacementTargetData.tracks[0] = {
+    ...replacementTargetData.tracks[0],
+    filePath: localMp3Path,
+    fileName: 'existing-local.mp3',
+    format: 'mp3',
+    fileSize: localMp3Stat.size,
+    modifiedAt: localMp3Stat.mtimeMs,
+  }
+  setStoredData(replacementTargetData)
+  const inspectedReplacement = await syncService.inspectPackage(
+    replacementPackagePath,
+  )
+  const replacementInspection = inspectedReplacement.inspection
+  if (!replacementInspection || replacementInspection.exactMatches !== 1)
+    throw new Error('Replacement media did not match by sourceVideoId')
+  let stoppedCurrentTrack = 0
+  const importedReplacement = await syncService.importPackage(
+    {
+      token: replacementInspection.token,
+      tracks: replacementInspection.tracks.map((item) => ({
+        recordId: item.recordId,
+        localTrackId: item.localTrackId,
+        mediaAction: 'replace',
+        existingFileAction: 'keep',
+      })),
+      likesMode: 'union',
+      playlistMode: 'newer',
+    },
+    {
+      currentTrackId: syncedTrack.id,
+      currentTrackPlaying: true,
+      stopCurrentTrack: async () => {
+        stoppedCurrentTrack += 1
+      },
+    },
+  )
+  const replacedTrack = getStoredData().tracks.find(
+    (item) => item.sourceVideoId === 'BaW_jenozKc',
+  )
+  if (
+    !importedReplacement.success ||
+    importedReplacement.summary?.replacedMedia !== 1 ||
+    stoppedCurrentTrack !== 1 ||
+    replacedTrack?.format !== 'm4a' ||
+    !existsSync(localMp3Path)
+  )
+    throw new Error('Current-track MP3/M4A-style media replacement failed')
+  initializeStore()
+  if (getStoredData().tracks[0]?.format !== 'm4a')
+    throw new Error('Replaced media did not survive store restart')
+  setStoredData(syncSource)
+  process.stdout.write('PULSE_SHELF_SYNC_MEDIA_DEVICE_AB_OK\n')
 
   const excludedPath = path.join(musicFolder, 'excluded.wav')
   await writeFile(excludedPath, createTestWav(510))

@@ -21,6 +21,7 @@ import type {
   ScanResult,
   Settings,
   SyncPackageExportOptions,
+  SyncPackageEstimate,
   SyncPackageImportPlan,
   SyncPackageInspectResult,
   SyncPackageOperationResult,
@@ -44,6 +45,7 @@ export const IPC = {
   syncPackageInspect: 'sync-package:inspect',
   syncPackageImport: 'sync-package:import',
   syncPackageGetStatus: 'sync-package:get-status',
+  syncPackageEstimate: 'sync-package:estimate',
   chooseMusicFolder: 'library:choose-folder',
   rescanMusicFolders: 'library:rescan',
   removeMusicFolder: 'library:remove-folder',
@@ -139,6 +141,9 @@ export interface ElectronApi {
     plan: SyncPackageImportPlan,
   ) => Promise<SyncPackageOperationResult>
   getSyncPackageStatus: () => Promise<SyncPackageStatus>
+  estimateSyncPackage: (
+    options: SyncPackageExportOptions,
+  ) => Promise<SyncPackageEstimate>
   chooseMusicFolder: () => Promise<ScanResult>
   rescanMusicFolders: () => Promise<ScanResult>
   removeMusicFolder: (folder: string) => Promise<ScanResult>

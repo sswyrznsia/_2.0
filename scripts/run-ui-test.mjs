@@ -374,6 +374,17 @@ try {
       mobile: false,
     })
     await delay(120)
+    await main.evaluate(`(() => {
+      const label = [...document.querySelectorAll('.sync-package-options label')]
+        .find((item) => item.textContent?.includes('음악 파일 포함'))
+      const input = label?.querySelector('input[type="checkbox"]')
+      input?.click()
+      return Boolean(input)
+    })()`)
+    await waitFor(
+      () => main.evaluate(`Boolean(document.querySelector('.sync-package-media-estimate'))`),
+      'sync package media estimate',
+    )
     const syncSettings = await main.evaluate(`(() => {
       const section = document.querySelector('.sync-package-settings')
       if (!section) return null
@@ -385,16 +396,18 @@ try {
         checkedCount: checkboxes.filter((item) => item.checked).length,
         exportButton: buttons.some((item) => item.textContent?.includes('패키지 내보내기')),
         importButton: buttons.some((item) => item.textContent?.includes('패키지 가져오기')),
+        mediaEstimate: Boolean(section.querySelector('.sync-package-media-estimate')),
         fitsViewport: section.scrollWidth <= section.clientWidth,
       }
     })()`)
     if (
       !syncSettings ||
       syncSettings.heading !== '기기 간 동기화' ||
-      syncSettings.checkboxCount !== 4 ||
-      syncSettings.checkedCount !== 4 ||
+      syncSettings.checkboxCount !== 5 ||
+      syncSettings.checkedCount !== 5 ||
       !syncSettings.exportButton ||
       !syncSettings.importButton ||
+      !syncSettings.mediaEstimate ||
       !syncSettings.fitsViewport
     ) throw new Error(`Sync package settings regression: ${JSON.stringify(syncSettings)}`)
     process.stdout.write('PULSE_SHELF_SYNC_SETTINGS_UI_TEST_OK\n')

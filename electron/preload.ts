@@ -22,6 +22,8 @@ const api: ElectronApi = {
   inspectSyncPackage: () => ipcRenderer.invoke(IPC.syncPackageInspect),
   importSyncPackage: (plan) => ipcRenderer.invoke(IPC.syncPackageImport, plan),
   getSyncPackageStatus: () => ipcRenderer.invoke(IPC.syncPackageGetStatus),
+  estimateSyncPackage: (options) =>
+    ipcRenderer.invoke(IPC.syncPackageEstimate, options),
   chooseMusicFolder: () => ipcRenderer.invoke(IPC.chooseMusicFolder),
   rescanMusicFolders: () => ipcRenderer.invoke(IPC.rescanMusicFolders),
   removeMusicFolder: (folder) =>

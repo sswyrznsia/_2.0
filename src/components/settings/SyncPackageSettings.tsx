@@ -1,5 +1,5 @@
 import { Download, Upload } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { usePlayerStore } from '../../stores/playerStore'
 import type {
@@ -7,6 +7,8 @@ import type {
   SyncImportTrackChoice,
   SyncPackageExportOptions,
   SyncPackageInspection,
+  SyncPackageEstimate,
+  SyncPackageOperationResult,
 } from '../../types/models'
 import './SyncPackageSettings.css'
 
@@ -15,6 +17,7 @@ const DEFAULT_OPTIONS: SyncPackageExportOptions = {
   playlists: true,
   likes: true,
   metadataOverrides: true,
+  mediaFiles: false,
 }
 
 export function SyncPackageSettings() {
@@ -31,13 +34,34 @@ export function SyncPackageSettings() {
   >('newer')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [estimate, setEstimate] = useState<SyncPackageEstimate | null>(null)
+  const [lastSummary, setLastSummary] =
+    useState<SyncPackageOperationResult['summary']>()
+
+  useEffect(() => {
+    let active = true
+    void window.electronAPI
+      .estimateSyncPackage(options)
+      .then((value) => {
+        if (active) setEstimate(value)
+      })
+      .catch(() => {
+        if (active) setEstimate(null)
+      })
+    return () => {
+      active = false
+    }
+  }, [options])
 
   const selectedMatches = useMemo(
     () =>
       inspection?.tracks.filter((track) =>
         track.matchKind === 'exact'
           ? Boolean(track.localTrackId)
-          : Boolean(choices[track.recordId]?.localTrackId),
+          : Boolean(
+              choices[track.recordId]?.localTrackId ||
+              choices[track.recordId]?.mediaAction === 'create',
+            ),
       ).length ?? 0,
     [choices, inspection],
   )
@@ -53,6 +77,7 @@ export function SyncPackageSettings() {
     try {
       const result = await window.electronAPI.exportSyncPackage(options)
       if (!result.cancelled) setMessage(result.message)
+      if (result.success) setLastSummary(result.summary)
     } catch {
       setMessage('동기화 패키지를 내보내지 못했습니다.')
     } finally {
@@ -74,6 +99,14 @@ export function SyncPackageSettings() {
               {
                 recordId: track.recordId,
                 localTrackId: track.localTrackId,
+                mediaAction: track.mediaAvailable
+                  ? track.matchKind === 'exact'
+                    ? 'keep'
+                    : track.matchKind === 'missing'
+                      ? 'create'
+                      : 'skip'
+                  : 'skip',
+                existingFileAction: 'keep',
                 conflicts: Object.fromEntries(
                   track.conflicts.map((conflict) => [
                     conflict.kind,
@@ -105,6 +138,7 @@ export function SyncPackageSettings() {
         playlistMode,
       })
       setMessage(result.message)
+      setLastSummary(result.summary)
       if (result.success) {
         await useAppStore.getState().refreshData()
         const imported = useAppStore.getState().data
@@ -127,6 +161,11 @@ export function SyncPackageSettings() {
       [recordId]: {
         ...(current[recordId] ?? { recordId }),
         localTrackId: localTrackId || undefined,
+        mediaAction: localTrackId
+          ? current[recordId]?.mediaAction === 'replace'
+            ? 'replace'
+            : 'keep'
+          : current[recordId]?.mediaAction,
         conflicts: Object.fromEntries(
           (
             inspection?.tracks
@@ -136,6 +175,22 @@ export function SyncPackageSettings() {
               )?.conflicts ?? []
           ).map((conflict) => [conflict.kind, conflict.recommended]),
         ),
+      },
+    }))
+
+  const chooseMediaAction = (
+    recordId: string,
+    mediaAction: NonNullable<SyncImportTrackChoice['mediaAction']>,
+  ) =>
+    setChoices((current) => ({
+      ...current,
+      [recordId]: {
+        ...(current[recordId] ?? { recordId }),
+        mediaAction,
+        localTrackId:
+          mediaAction === 'create'
+            ? undefined
+            : current[recordId]?.localTrackId,
       },
     }))
 
@@ -204,12 +259,49 @@ export function SyncPackageSettings() {
           checked={options.metadataOverrides}
           onChange={(value) => changeOption('metadataOverrides', value)}
         />
+        <Option
+          label="음악 파일 포함"
+          checked={options.mediaFiles}
+          onChange={(value) => changeOption('mediaFiles', value)}
+        />
       </fieldset>
+
+      {options.mediaFiles && (
+        <div className="sync-package-media-estimate">
+          <strong>음악 파일을 포함하면 패키지 크기가 크게 증가합니다.</strong>
+          <span>
+            전체 {estimate?.totalTracks ?? 0}곡 · 포함 가능{' '}
+            {estimate?.mediaFiles ?? 0}개 · 예상 크기{' '}
+            {formatBytes(estimate?.mediaBytes ?? 0)}
+          </span>
+          {(estimate?.excludedMedia ?? 0) > 0 && (
+            <small>
+              경로 없음·지원하지 않는 형식·4GB 초과 파일{' '}
+              {estimate?.excludedMedia}개는 제외됩니다.
+            </small>
+          )}
+          {estimate?.exceedsLimit && (
+            <small className="is-error">20GB 최대 용량을 초과합니다.</small>
+          )}
+        </div>
+      )}
 
       {message && (
         <p className="settings-status" role="status">
           {message}
         </p>
+      )}
+      {lastSummary && (
+        <div className="sync-package-result" role="status">
+          <span>새 곡 {lastSummary.createdTracks ?? 0}개</span>
+          <span>미디어 교체 {lastSummary.replacedMedia ?? 0}개</span>
+          <span>가사 {lastSummary.lyrics}개</span>
+          <span>플레이리스트 {lastSummary.playlists}개</span>
+          <span>변경 없음 {lastSummary.unchangedItems ?? 0}개</span>
+          {lastSummary.warnings?.map((warning) => (
+            <small key={warning}>{warning}</small>
+          ))}
+        </div>
       )}
 
       {inspection && (
@@ -250,6 +342,18 @@ export function SyncPackageSettings() {
             <div>
               <dt>플레이리스트</dt>
               <dd>{inspection.playlistCount}</dd>
+            </div>
+            <div>
+              <dt>포함 미디어</dt>
+              <dd>{inspection.mediaFiles}</dd>
+            </div>
+            <div>
+              <dt>새로 가져올 곡</dt>
+              <dd>{inspection.creatableTracks}</dd>
+            </div>
+            <div>
+              <dt>미디어 용량</dt>
+              <dd>{formatBytes(inspection.totalMediaBytes)}</dd>
             </div>
           </dl>
 
@@ -297,6 +401,66 @@ export function SyncPackageSettings() {
                 <small>
                   포함: {track.importedData.join(', ') || '식별 정보만'}
                 </small>
+                {track.mediaAvailable && (
+                  <div className="sync-package-media-choice">
+                    <label>
+                      음악 파일 처리
+                      <select
+                        value={choices[track.recordId]?.mediaAction ?? 'skip'}
+                        onChange={(event) =>
+                          chooseMediaAction(
+                            track.recordId,
+                            event.target.value as NonNullable<
+                              SyncImportTrackChoice['mediaAction']
+                            >,
+                          )
+                        }
+                      >
+                        {track.matchKind !== 'missing' && (
+                          <option value="keep">현재 로컬 파일 유지</option>
+                        )}
+                        {(track.matchKind === 'exact' ||
+                          Boolean(choices[track.recordId]?.localTrackId)) && (
+                          <option value="replace">패키지 파일로 교체</option>
+                        )}
+                        <option value="create">새 곡으로 가져오기</option>
+                        <option value="skip">미디어 건너뛰기</option>
+                      </select>
+                    </label>
+                    {choices[track.recordId]?.mediaAction === 'replace' && (
+                      <label>
+                        기존 파일
+                        <select
+                          value={
+                            choices[track.recordId]?.existingFileAction ??
+                            'keep'
+                          }
+                          onChange={(event) =>
+                            setChoices((current) => ({
+                              ...current,
+                              [track.recordId]: {
+                                ...(current[track.recordId] ?? {
+                                  recordId: track.recordId,
+                                }),
+                                existingFileAction: event.target.value as
+                                  'keep' | 'trash',
+                              },
+                            }))
+                          }
+                        >
+                          <option value="keep">기존 파일 그대로 유지</option>
+                          <option value="trash">성공 후 휴지통으로 이동</option>
+                        </select>
+                      </label>
+                    )}
+                    <small>
+                      {formatBytes(track.mediaSize)} · 검증 후 가져옵니다.
+                    </small>
+                  </div>
+                )}
+                {!track.mediaAvailable && track.matchKind === 'missing' && (
+                  <p>패키지에 음악 파일이 없어 새 Track을 만들 수 없습니다.</p>
+                )}
                 {track.matchKind === 'possible' && (
                   <label>
                     로컬 곡 연결 (자동 적용되지 않음)
@@ -359,7 +523,8 @@ export function SyncPackageSettings() {
           </div>
           <footer>
             <span>
-              {selectedMatches}곡을 적용합니다. 일치하지 않는 곡은 건너뜁니다.
+              {selectedMatches}곡을 적용합니다. 새 곡과 미디어 교체 선택도
+              포함됩니다.
             </span>
             <button
               type="button"
@@ -420,4 +585,11 @@ function conflictLabel(kind: SyncConflictKind) {
 function formatDuration(durationMs: number) {
   const seconds = Math.round(durationMs / 1_000)
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`
 }

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import type {
   PulseShelfSyncPackageV1,
+  PulseShelfSyncPackageV2,
   SyncPackageImportPlan,
   SyncTrackIdentity,
 } from '../src/types/models'
@@ -15,8 +19,16 @@ import {
   buildTrackIdentity,
   inspectSyncPackage,
   SYNC_PACKAGE_MAX_BYTES,
+  isSafeArchivePath,
   syncPackageSchema,
+  syncPackageV2Schema,
 } from '../electron/syncPackageCore'
+import {
+  extractVerifiedEntries,
+  isSymlinkAttributes,
+  openSyncArchive,
+  writeSyncArchive,
+} from '../electron/syncArchive'
 
 const trackId = 'a'.repeat(64)
 const secondTrackId = 'b'.repeat(64)
@@ -250,4 +262,157 @@ assert.equal(
 )
 assert.deepEqual(repeated.data.playlists[0].trackIds, [trackId])
 
+assert.equal(isSafeArchivePath('media/id/original.m4a'), true)
+assert.equal(isSafeArchivePath('../escape.mp3'), false)
+assert.equal(isSafeArchivePath('/absolute.mp3'), false)
+assert.equal(isSafeArchivePath('C:/drive.mp3'), false)
+assert.equal(isSafeArchivePath('media\\escape.mp3'), false)
+assert.equal(isSymlinkAttributes((0o120000 << 16) >>> 0), true)
+
+const archiveRoot = await mkdtemp(path.join(os.tmpdir(), 'pulse-sync-archive-'))
+try {
+  const mediaContent = Buffer.from('RIFF0000WAVEpulse-shelf-streaming-test')
+  const mediaHash = createHash('sha256').update(mediaContent).digest('hex')
+  const mediaPath = path.join(archiveRoot, 'fixture.wav')
+  await writeFile(mediaPath, mediaContent)
+  const recordId = randomUUID()
+  const v2: PulseShelfSyncPackageV2 = {
+    schemaVersion: 2,
+    appVersion: '2.0.0',
+    exportedAt: 1,
+    deviceId: randomUUID(),
+    tracks: [
+      {
+        recordId,
+        identity: {
+          fileSha256: mediaHash,
+          durationMs: 1_000,
+          normalizedTitle: 'fixture',
+          normalizedArtist: 'pulse',
+        },
+        metadata: { title: 'Fixture', artist: 'Pulse' },
+        media: {
+          archivePath: `media/${recordId}/original.wav`,
+          originalFileName: 'fixture.wav',
+          extension: 'wav',
+          size: mediaContent.byteLength,
+          sha256: mediaHash,
+          mimeType: 'audio/wav',
+        },
+      },
+    ],
+    playlists: [],
+    exportOptions: {
+      lyrics: true,
+      playlists: true,
+      likes: true,
+      metadataOverrides: true,
+      mediaFiles: true,
+    },
+  }
+  assert.equal(syncPackageV2Schema.safeParse(v2).success, true)
+  const archivePath = path.join(archiveRoot, 'valid.pssync')
+  await writeSyncArchive(archivePath, v2, [
+    { archivePath: v2.tracks[0].media!.archivePath, filePath: mediaPath },
+  ])
+  const opened = await openSyncArchive(archivePath)
+  assert.equal(opened.manifest.schemaVersion, 2)
+  const extracted = await extractVerifiedEntries(
+    opened,
+    [v2.tracks[0].media!],
+    path.join(archiveRoot, 'extracted'),
+  )
+  assert.equal(
+    createHash('sha256')
+      .update(
+        await readTestFile(extracted.get(v2.tracks[0].media!.archivePath)!),
+      )
+      .digest('hex'),
+    mediaHash,
+  )
+
+  const unexpectedArchive = path.join(archiveRoot, 'unexpected.pssync')
+  await writeSyncArchive(unexpectedArchive, v2, [
+    { archivePath: v2.tracks[0].media!.archivePath, filePath: mediaPath },
+    { archivePath: 'media/unexpected.exe', filePath: mediaPath },
+  ])
+  await assert.rejects(() => openSyncArchive(unexpectedArchive))
+  await assert.rejects(() =>
+    writeSyncArchive(path.join(archiveRoot, 'zip-slip.pssync'), v2, [
+      { archivePath: '../escape.wav', filePath: mediaPath },
+    ]),
+  )
+
+  const badHash = structuredClone(v2)
+  badHash.tracks[0].media!.sha256 = 'f'.repeat(64)
+  const badHashArchive = path.join(archiveRoot, 'bad-hash.pssync')
+  await writeSyncArchive(badHashArchive, badHash, [
+    { archivePath: badHash.tracks[0].media!.archivePath, filePath: mediaPath },
+  ])
+  const openedBadHash = await openSyncArchive(badHashArchive)
+  await assert.rejects(() =>
+    extractVerifiedEntries(
+      openedBadHash,
+      [badHash.tracks[0].media!],
+      path.join(archiveRoot, 'bad-hash-extract'),
+    ),
+  )
+
+  const badSize = structuredClone(v2)
+  badSize.tracks[0].media!.size += 1
+  const badSizeArchive = path.join(archiveRoot, 'bad-size.pssync')
+  await writeSyncArchive(badSizeArchive, badSize, [
+    { archivePath: badSize.tracks[0].media!.archivePath, filePath: mediaPath },
+  ])
+  await assert.rejects(() => openSyncArchive(badSizeArchive))
+
+  const wrongFormat = structuredClone(v2)
+  wrongFormat.tracks[0].media!.extension = 'm4a'
+  wrongFormat.tracks[0].media!.archivePath = `media/${recordId}/original.m4a`
+  const wrongFormatArchive = path.join(archiveRoot, 'wrong-format.pssync')
+  await writeSyncArchive(wrongFormatArchive, wrongFormat, [
+    {
+      archivePath: wrongFormat.tracks[0].media!.archivePath,
+      filePath: mediaPath,
+    },
+  ])
+  const openedWrongFormat = await openSyncArchive(wrongFormatArchive)
+  await assert.rejects(() =>
+    extractVerifiedEntries(
+      openedWrongFormat,
+      [wrongFormat.tracks[0].media!],
+      path.join(archiveRoot, 'wrong-format-extract'),
+    ),
+  )
+
+  const executable = structuredClone(v2) as unknown as Record<string, unknown>
+  ;(
+    executable.tracks as Array<{ media: { extension: string } }>
+  )[0].media.extension = 'exe'
+  assert.equal(syncPackageV2Schema.safeParse(executable).success, false)
+
+  const oversized = structuredClone(v2)
+  oversized.tracks = Array.from({ length: 6 }, (_, index) => {
+    const item = structuredClone(v2.tracks[0])
+    item.recordId = randomUUID()
+    item.identity.fileSha256 = String(index + 1).padStart(64, '0')
+    item.media!.archivePath = `media/${item.recordId}/original.wav`
+    item.media!.sha256 = item.identity.fileSha256
+    item.media!.size = 4 * 1024 * 1024 * 1024
+    return item
+  })
+  assert.equal(
+    syncPackageV2Schema.safeParse(oversized).success,
+    false,
+    'v2 manifest media total must not exceed 20GB',
+  )
+} finally {
+  await rm(archiveRoot, { recursive: true, force: true })
+}
+
 process.stdout.write('PULSE_SHELF_SYNC_PACKAGE_TEST_OK\n')
+
+async function readTestFile(filePath: string) {
+  const { readFile } = await import('node:fs/promises')
+  return readFile(filePath)
+}
