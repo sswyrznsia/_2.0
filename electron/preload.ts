@@ -17,6 +17,11 @@ const api: ElectronApi = {
   resetData: () => ipcRenderer.invoke(IPC.resetData),
   exportData: () => ipcRenderer.invoke(IPC.exportData),
   importData: () => ipcRenderer.invoke(IPC.importData),
+  exportSyncPackage: (options) =>
+    ipcRenderer.invoke(IPC.syncPackageExport, options),
+  inspectSyncPackage: () => ipcRenderer.invoke(IPC.syncPackageInspect),
+  importSyncPackage: (plan) => ipcRenderer.invoke(IPC.syncPackageImport, plan),
+  getSyncPackageStatus: () => ipcRenderer.invoke(IPC.syncPackageGetStatus),
   chooseMusicFolder: () => ipcRenderer.invoke(IPC.chooseMusicFolder),
   rescanMusicFolders: () => ipcRenderer.invoke(IPC.rescanMusicFolders),
   removeMusicFolder: (folder) =>

@@ -1,4 +1,5 @@
 import { copyFileSync, existsSync, statSync } from 'node:fs'
+import { copyFile, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import ElectronStore from 'electron-store'
 import { z } from 'zod'
@@ -160,6 +161,7 @@ export const appDataSchema = z.object({
     .array(
       z.object({
         id: z.string().uuid(),
+        syncId: z.string().uuid().optional(),
         name: z.string().trim().min(1).max(80),
         trackIds: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(100_000),
         createdAt: z.number().nonnegative(),
@@ -555,6 +557,49 @@ export function setStoredData(value: StoredAppData): StoredAppData {
   if (!result.success) throw new Error('저장할 데이터가 올바르지 않습니다.')
   store.set('data', result.data)
   return structuredClone(result.data)
+}
+
+export async function setStoredDataWithImportBackup(
+  value: StoredAppData,
+): Promise<{ data: StoredAppData; backupPath: string }> {
+  if (!store) throw new Error('Data store has not been initialized')
+  const result = storedDataSchema.safeParse(value)
+  if (!result.success)
+    throw new Error('가져올 동기화 데이터가 현재 저장 스키마와 맞지 않습니다.')
+
+  const storePath = store.path
+  const directory = path.dirname(storePath)
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backupPath = path.join(directory, `pre-import-backup-${timestamp}.json`)
+  const stagingPath = path.join(
+    directory,
+    `.sync-import-${process.pid}-${Date.now()}.tmp`,
+  )
+  await writeFile(stagingPath, JSON.stringify({ data: result.data }), 'utf8')
+  const staged = JSON.parse(await readFile(stagingPath, 'utf8')) as unknown
+  const stagedResult = z.object({ data: storedDataSchema }).safeParse(staged)
+  if (!stagedResult.success) {
+    await rm(stagingPath, { force: true })
+    throw new Error('동기화 데이터의 임시 저장 검증에 실패했습니다.')
+  }
+
+  if (existsSync(storePath)) await copyFile(storePath, backupPath)
+  else
+    await writeFile(
+      backupPath,
+      JSON.stringify({ data: getStoredData() }),
+      'utf8',
+    )
+  try {
+    // electron-store persists through an atomic temporary-file replacement.
+    store.set('data', stagedResult.data.data)
+    await rm(stagingPath, { force: true })
+    return { data: structuredClone(stagedResult.data.data), backupPath }
+  } catch (error) {
+    await rm(stagingPath, { force: true }).catch(() => undefined)
+    if (existsSync(backupPath)) await copyFile(backupPath, storePath)
+    throw error
+  }
 }
 
 export function setPublicData(

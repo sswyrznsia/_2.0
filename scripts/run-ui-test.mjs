@@ -357,6 +357,47 @@ try {
       await writeFile(screenshot, Buffer.from(capture.data, 'base64'))
       results.push({ target, screenshot })
     }
+    await main.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.sidebar nav button')]
+        .find((item) => item.textContent?.includes('설정'))
+      button?.click()
+      return Boolean(button)
+    })()`)
+    await waitFor(
+      () => main.evaluate(`Boolean(document.querySelector('.sync-package-settings'))`),
+      'sync package settings',
+    )
+    await main.send('Emulation.setDeviceMetricsOverride', {
+      width: 720,
+      height: 800,
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+    await delay(120)
+    const syncSettings = await main.evaluate(`(() => {
+      const section = document.querySelector('.sync-package-settings')
+      if (!section) return null
+      const checkboxes = [...section.querySelectorAll('input[type="checkbox"]')]
+      const buttons = [...section.querySelectorAll('button')]
+      return {
+        heading: section.querySelector('h2')?.textContent,
+        checkboxCount: checkboxes.length,
+        checkedCount: checkboxes.filter((item) => item.checked).length,
+        exportButton: buttons.some((item) => item.textContent?.includes('패키지 내보내기')),
+        importButton: buttons.some((item) => item.textContent?.includes('패키지 가져오기')),
+        fitsViewport: section.scrollWidth <= section.clientWidth,
+      }
+    })()`)
+    if (
+      !syncSettings ||
+      syncSettings.heading !== '기기 간 동기화' ||
+      syncSettings.checkboxCount !== 4 ||
+      syncSettings.checkedCount !== 4 ||
+      !syncSettings.exportButton ||
+      !syncSettings.importButton ||
+      !syncSettings.fitsViewport
+    ) throw new Error(`Sync package settings regression: ${JSON.stringify(syncSettings)}`)
+    process.stdout.write('PULSE_SHELF_SYNC_SETTINGS_UI_TEST_OK\n')
     process.stdout.write(`PULSE_SHELF_UI_TEST_OK\n${JSON.stringify(results, null, 2)}\n`)
   } else {
     let mode = await connectTarget((url) => url.includes('taskbarMode=1'), 'taskbar mode renderer')

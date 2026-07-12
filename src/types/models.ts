@@ -47,6 +47,7 @@ export interface TrackRemovalDetails {
 
 export interface Playlist {
   id: string
+  syncId?: string
   name: string
   trackIds: string[]
   createdAt: number
@@ -439,6 +440,140 @@ export interface DataTransferResult {
   cancelled: boolean
   message: string
   data?: AppData
+}
+
+export interface SyncTrackIdentity {
+  youtubeVideoId?: string
+  sourceType?: string
+  sourceId?: string
+  fileSha256?: string
+  durationMs?: number
+  normalizedTitle?: string
+  normalizedArtist?: string
+}
+
+export interface SyncPackageExportOptions {
+  lyrics: boolean
+  playlists: boolean
+  likes: boolean
+  metadataOverrides: boolean
+}
+
+export interface SyncTrackRecord {
+  recordId: string
+  identity: SyncTrackIdentity
+  metadata?: {
+    title?: string
+    artist?: string
+    album?: string
+  }
+  liked?: boolean
+  lyrics?: Omit<TrackLyrics, 'trackId'>
+  lyricsSyncProfile?: Omit<LyricsSyncProfile, 'trackId'>
+  generatedLyricsTimeline?: Omit<GeneratedLyricsTimeline, 'trackId'>
+}
+
+export interface SyncPlaylistRecord {
+  syncId: string
+  name: string
+  tracks: SyncTrackIdentity[]
+  createdAt: number
+  updatedAt: number
+  coverTrack?: SyncTrackIdentity
+}
+
+export interface PulseShelfSyncPackageV1 {
+  schemaVersion: 1
+  appVersion: string
+  exportedAt: number
+  deviceId: string
+  tracks: SyncTrackRecord[]
+  playlists: SyncPlaylistRecord[]
+  exportOptions: SyncPackageExportOptions
+}
+
+export type SyncTrackMatchKind = 'exact' | 'possible' | 'missing'
+export type SyncConflictKind =
+  'lyrics' | 'lyricsSyncProfile' | 'generatedLyricsTimeline' | 'metadata'
+
+export interface SyncConflictPreview {
+  kind: SyncConflictKind
+  localSummary: string
+  importedSummary: string
+  recommended: 'local' | 'imported'
+}
+
+export interface SyncMatchCandidate {
+  trackId: string
+  title: string
+  artist: string
+  durationMs: number
+  conflicts?: SyncConflictPreview[]
+}
+
+export interface SyncTrackPreview {
+  recordId: string
+  title: string
+  artist: string
+  matchKind: SyncTrackMatchKind
+  localTrackId?: string
+  candidates: SyncMatchCandidate[]
+  conflicts: SyncConflictPreview[]
+  importedData: string[]
+}
+
+export interface SyncPackageInspection {
+  token: string
+  fileName: string
+  exportedAt: number
+  appVersion: string
+  tracks: SyncTrackPreview[]
+  playlistCount: number
+  exactMatches: number
+  possibleMatches: number
+  missingTracks: number
+  conflictCount: number
+  invalidEntries: number
+}
+
+export interface SyncPackageInspectResult {
+  success: boolean
+  cancelled: boolean
+  message: string
+  inspection?: SyncPackageInspection
+}
+
+export interface SyncImportTrackChoice {
+  recordId: string
+  localTrackId?: string
+  conflicts?: Partial<Record<SyncConflictKind, 'local' | 'imported'>>
+}
+
+export interface SyncPackageImportPlan {
+  token: string
+  tracks: SyncImportTrackChoice[]
+  likesMode: 'union' | 'replace'
+  playlistMode: 'newer' | 'local' | 'imported'
+}
+
+export interface SyncPackageOperationResult {
+  success: boolean
+  cancelled: boolean
+  message: string
+  data?: AppData
+  summary?: {
+    matchedTracks: number
+    skippedTracks: number
+    lyrics: number
+    likes: number
+    playlists: number
+    conflicts: number
+  }
+}
+
+export interface SyncPackageStatus {
+  busy: boolean
+  operation?: 'export' | 'inspect' | 'import'
 }
 
 export interface ViewBounds {

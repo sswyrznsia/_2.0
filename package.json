@@ -17,6 +17,7 @@
     "test:media": "node scripts/run-self-test.mjs",
     "test:lyrics": "node scripts/run-lyrics-test.mjs && node scripts/run-lyrics-ui-test.mjs",
     "test:auto-sync": "node scripts/run-auto-sync-test.mjs",
+    "test:sync": "node scripts/run-sync-package-test.mjs",
     "test:ui": "npm run build && node scripts/run-ui-test.mjs",
     "test:taskbar": "npm run build && node scripts/run-taskbar-geometry-test.mjs && node scripts/run-taskbar-ui-test.mjs",
     "test:taskbar:capture": "npm run build && node scripts/run-taskbar-capture-test.mjs",

@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react'
 import type { YouTubeExtensionStatus } from '../types/models'
 import { useAppStore } from '../stores/appStore'
 import { usePlayerStore } from '../stores/playerStore'
+import { SyncPackageSettings } from '../components/settings/SyncPackageSettings'
 
 export function SettingsPage() {
   const data = useAppStore((state) => state.data)
@@ -512,6 +513,7 @@ export function SettingsPage() {
           </span>
         </div>
       </section>
+      <SyncPackageSettings />
       <section className="settings-section">
         <h2>데이터</h2>
         <div className="setting-row">

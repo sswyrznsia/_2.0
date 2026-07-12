@@ -20,6 +20,11 @@ import type {
   ScanProgress,
   ScanResult,
   Settings,
+  SyncPackageExportOptions,
+  SyncPackageImportPlan,
+  SyncPackageInspectResult,
+  SyncPackageOperationResult,
+  SyncPackageStatus,
   TaskbarModeAction,
   TaskbarModeState,
   TaskbarToggleSettingsPatch,
@@ -35,6 +40,10 @@ export const IPC = {
   resetData: 'data:reset',
   exportData: 'data:export',
   importData: 'data:import',
+  syncPackageExport: 'sync-package:export',
+  syncPackageInspect: 'sync-package:inspect',
+  syncPackageImport: 'sync-package:import',
+  syncPackageGetStatus: 'sync-package:get-status',
   chooseMusicFolder: 'library:choose-folder',
   rescanMusicFolders: 'library:rescan',
   removeMusicFolder: 'library:remove-folder',
@@ -122,6 +131,14 @@ export interface ElectronApi {
   resetData: () => Promise<AppData>
   exportData: () => Promise<DataTransferResult>
   importData: () => Promise<DataTransferResult>
+  exportSyncPackage: (
+    options: SyncPackageExportOptions,
+  ) => Promise<SyncPackageOperationResult>
+  inspectSyncPackage: () => Promise<SyncPackageInspectResult>
+  importSyncPackage: (
+    plan: SyncPackageImportPlan,
+  ) => Promise<SyncPackageOperationResult>
+  getSyncPackageStatus: () => Promise<SyncPackageStatus>
   chooseMusicFolder: () => Promise<ScanResult>
   rescanMusicFolders: () => Promise<ScanResult>
   removeMusicFolder: (folder: string) => Promise<ScanResult>

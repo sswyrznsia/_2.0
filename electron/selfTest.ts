@@ -10,6 +10,7 @@ import {
   initializeStore,
   setPublicData,
   setStoredData,
+  setStoredDataWithImportBackup,
 } from './data'
 import {
   cancelActiveScan,
@@ -218,6 +219,28 @@ export async function runSelfTest(): Promise<SelfTestFixture> {
   )
     throw new Error('Playlist or player session persistence failed')
   if (!progressEvents.length) throw new Error('Scan progress was not emitted')
+
+  const beforeSyncImport = getStoredData()
+  let invalidSyncImportRejected = false
+  try {
+    await setStoredDataWithImportBackup({
+      ...beforeSyncImport,
+      tracks: beforeSyncImport.tracks.map((item, index) =>
+        index === 0 ? { ...item, duration: -1 } : item,
+      ),
+    })
+  } catch {
+    invalidSyncImportRejected = true
+  }
+  if (
+    !invalidSyncImportRejected ||
+    JSON.stringify(getStoredData()) !== JSON.stringify(beforeSyncImport)
+  )
+    throw new Error('Invalid sync import changed the current data')
+  const atomicImport = await setStoredDataWithImportBackup(beforeSyncImport)
+  if (!existsSync(atomicImport.backupPath))
+    throw new Error('Pre-import backup was not created')
+  process.stdout.write('PULSE_SHELF_SYNC_IMPORT_ATOMIC_OK\n')
 
   const excludedPath = path.join(musicFolder, 'excluded.wav')
   await writeFile(excludedPath, createTestWav(510))

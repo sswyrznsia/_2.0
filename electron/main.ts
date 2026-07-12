@@ -46,6 +46,7 @@ import {
   type StoredTrack,
 } from './data'
 import { exportAppData, importAppData } from './ipc/dataTransfer'
+import { SyncPackageService } from './ipc/syncPackage'
 import {
   cancelActiveScan,
   chooseAndScanFolder,
@@ -1340,6 +1341,7 @@ function applySettings(settings: Settings) {
 }
 
 function registerIpc() {
+  const syncPackageService = new SyncPackageService()
   ipcMain.handle(IPC.loadData, (event) => {
     assertTrustedSender(event)
     return getPublicData()
@@ -1374,6 +1376,30 @@ function registerIpc() {
     await autoSyncService?.cancelActiveAndDrain()
     await mediaImportService?.cancelAllAndDrain()
     const result = await importAppData()
+    if (result.data) {
+      applySettings(result.data.settings)
+      await mediaImportService?.initialize()
+      refreshMediaIndex()
+    }
+    return result
+  })
+  ipcMain.handle(IPC.syncPackageGetStatus, (event) => {
+    assertMainSender(event)
+    return syncPackageService.getStatus()
+  })
+  ipcMain.handle(IPC.syncPackageExport, (event, options: unknown) => {
+    assertMainSender(event)
+    return syncPackageService.exportPackage(options)
+  })
+  ipcMain.handle(IPC.syncPackageInspect, (event) => {
+    assertMainSender(event)
+    return syncPackageService.inspectPackage()
+  })
+  ipcMain.handle(IPC.syncPackageImport, async (event, plan: unknown) => {
+    assertMainSender(event)
+    await autoSyncService?.cancelActiveAndDrain()
+    await mediaImportService?.cancelAllAndDrain()
+    const result = await syncPackageService.importPackage(plan)
     if (result.data) {
       applySettings(result.data.settings)
       await mediaImportService?.initialize()
