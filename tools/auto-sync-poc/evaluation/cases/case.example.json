@@ -1,0 +1,8 @@
+{
+  "id": "japanese-cover-01",
+  "audioPath": "C:/private-music/japanese-cover-01.m4a",
+  "plainLyrics": ["一行目", "二行目", "繰り返す歌詞", "繰り返す歌詞"],
+  "originalSyncedLyrics": "[00:10.00]一行目\n[00:15.00]二行目\n[00:20.00]繰り返す歌詞\n[00:40.00]繰り返す歌詞",
+  "keywordHotwords": ["一行目", "固有名詞"],
+  "groundTruthPath": "ground-truth/japanese-cover-01.json"
+}

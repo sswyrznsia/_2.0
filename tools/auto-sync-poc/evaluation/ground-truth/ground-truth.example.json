@@ -1,0 +1,15 @@
+{
+  "groundTruthAnchors": [
+    { "lineIndex": 0, "audioTimeMs": 12340 },
+    { "lineIndex": 1, "audioTimeMs": 17420 },
+    { "lineIndex": 2, "audioTimeMs": 22800 },
+    { "lineIndex": 3, "audioTimeMs": 43100 }
+  ],
+  "errorAnnotations": [
+    {
+      "type": "repeated_chorus",
+      "lineIndices": [2, 3],
+      "note": "Confirm that the second chorus is not aligned to the first occurrence."
+    }
+  ]
+}

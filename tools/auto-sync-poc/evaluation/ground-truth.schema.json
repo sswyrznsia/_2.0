@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Human ground truth for automatic sync",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["groundTruthAnchors"],
+  "$defs": {
+    "errorAnnotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "lineIndices"],
+      "properties": {
+        "type": {
+          "enum": [
+            "intro_difference",
+            "tempo_difference",
+            "instrumental_break",
+            "repeated_chorus",
+            "omitted_lyrics",
+            "ad_lib",
+            "duet_or_harmony",
+            "long_syllable",
+            "whisper_hallucination",
+            "vocal_separation_artifact"
+          ]
+        },
+        "lineIndices": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "note": { "type": "string" }
+      }
+    }
+  },
+  "properties": {
+    "groundTruthAnchors": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["lineIndex", "audioTimeMs"],
+        "properties": {
+          "lineIndex": { "type": "integer", "minimum": 0 },
+          "audioTimeMs": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "errorAnnotations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/errorAnnotation" }
+    }
+  }
+}

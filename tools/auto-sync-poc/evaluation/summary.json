@@ -1,0 +1,8 @@
+{
+  "status": "not-run",
+  "caseCount": 0,
+  "recommendation": {
+    "status": "insufficient-human-ground-truth",
+    "bestVariant": null
+  }
+}

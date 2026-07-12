@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { ElectronApi } from '../src/types/ipc'
 import { IPC } from '../src/types/ipc'
 import type {
+  AutoSyncJob,
   MediaImportJob,
   PlayerCommand,
   PlayerSnapshot,
@@ -52,6 +53,35 @@ const api: ElectronApi = {
     ipcRenderer.invoke(IPC.lyricsSyncSave, profile),
   clearLyricsSyncProfile: (trackId) =>
     ipcRenderer.invoke(IPC.lyricsSyncClear, trackId),
+  getLyricsAutoSyncAvailability: (trackId) =>
+    ipcRenderer.invoke(IPC.lyricsAutoSyncGetAvailability, trackId),
+  startLyricsAutoSync: (trackId) =>
+    ipcRenderer.invoke(IPC.lyricsAutoSyncStart, trackId),
+  cancelLyricsAutoSync: (jobId) =>
+    ipcRenderer.invoke(IPC.lyricsAutoSyncCancel, jobId),
+  getLyricsAutoSyncJob: (trackId) =>
+    ipcRenderer.invoke(IPC.lyricsAutoSyncGetActiveJob, trackId),
+  discardLyricsAutoSync: (jobId) =>
+    ipcRenderer.invoke(IPC.lyricsAutoSyncDiscard, jobId),
+  onLyricsAutoSyncProgress: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, job: AutoSyncJob) =>
+      listener(job)
+    ipcRenderer.on(IPC.lyricsAutoSyncProgress, handler)
+    return () => ipcRenderer.removeListener(IPC.lyricsAutoSyncProgress, handler)
+  },
+  onLyricsAutoSyncCompleted: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, job: AutoSyncJob) =>
+      listener(job)
+    ipcRenderer.on(IPC.lyricsAutoSyncCompleted, handler)
+    return () =>
+      ipcRenderer.removeListener(IPC.lyricsAutoSyncCompleted, handler)
+  },
+  onLyricsAutoSyncFailed: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, job: AutoSyncJob) =>
+      listener(job)
+    ipcRenderer.on(IPC.lyricsAutoSyncFailed, handler)
+    return () => ipcRenderer.removeListener(IPC.lyricsAutoSyncFailed, handler)
+  },
   revealTrack: (trackId) => ipcRenderer.invoke(IPC.revealTrack, trackId),
   openMiniPlayer: () => ipcRenderer.invoke(IPC.openMiniPlayer),
   showMainWindow: () => ipcRenderer.invoke(IPC.showMainWindow),
@@ -61,7 +91,8 @@ const api: ElectronApi = {
     ipcRenderer.invoke(IPC.setMainWindowFullScreen, fullscreen),
   quitApp: () => ipcRenderer.invoke(IPC.quitApp),
   closeMiniPlayer: () => ipcRenderer.invoke(IPC.closeMiniPlayer),
-  taskbarModeAction: (action) => ipcRenderer.invoke(IPC.taskbarModeAction, action),
+  taskbarModeAction: (action) =>
+    ipcRenderer.invoke(IPC.taskbarModeAction, action),
   getTaskbarModeState: () => ipcRenderer.invoke(IPC.taskbarModeGetState),
   onTaskbarModeState: (listener) => {
     const handler = (

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pulse Shelf automatic sync PoC input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["trackId", "audioPath", "plainLyrics", "syncedLyrics"],
+  "properties": {
+    "trackId": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "audioPath": { "type": "string", "minLength": 1 },
+    "plainLyrics": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      ]
+    },
+    "syncedLyrics": { "type": "string", "minLength": 1 },
+    "language": { "const": "ja" },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "source": { "type": "string", "minLength": 1, "maxLength": 100 }
+      }
+    },
+    "workDirectory": { "type": "string", "minLength": 1 },
+    "resultPath": { "type": "string", "minLength": 1 },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "whisperModel": { "type": "string", "default": "large-v3" },
+        "confidenceThreshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.66
+        }
+      }
+    }
+  }
+}

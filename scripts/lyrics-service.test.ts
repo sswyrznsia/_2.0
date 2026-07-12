@@ -52,6 +52,56 @@ async function withFetch(
   }
 }
 
+async function withProviderFetch(
+  responses: {
+    lrclib: unknown
+    lyricaSynced?: unknown
+    lyricaPlain?: unknown
+    lyricaStatus?: number
+  },
+  callback: (calls: { lrclib: number; lyrica: number }) => Promise<void>,
+) {
+  const original = globalThis.fetch
+  const calls = { lrclib: 0, lyrica: 0 }
+  globalThis.fetch = (async (input) => {
+    const url = new URL(String(input))
+    if (url.hostname === 'lrclib.net' || url.pathname.includes('/api/search')) {
+      calls.lrclib += 1
+      return new Response(JSON.stringify(responses.lrclib), { status: 200 })
+    }
+    calls.lyrica += 1
+    if (responses.lyricaStatus)
+      return new Response('', { status: responses.lyricaStatus })
+    const payload =
+      url.searchParams.get('timestamps') === 'true'
+        ? responses.lyricaSynced
+        : responses.lyricaPlain
+    return new Response(JSON.stringify(payload), { status: 200 })
+  }) as typeof fetch
+  try {
+    new LyricsService().clearCache()
+    await callback(calls)
+  } finally {
+    globalThis.fetch = original
+  }
+}
+
+const lyricaPayload = (overrides: Record<string, unknown> = {}) => ({
+  status: 'success',
+  data: {
+    source: 'youtube_music',
+    artist: 'Test Artist',
+    title: 'Test Song',
+    plain_lyrics: 'First line\nSecond line',
+    timed_lyrics: [
+      { text: 'First line', start_time: 0, end_time: 1_250, id: 1 },
+      { text: 'Second line', start_time: 1_250, end_time: 2_500, id: 2 },
+    ],
+    metadata: { album: 'Test Album', duration: 180 },
+    ...overrides,
+  },
+})
+
 assert.equal(
   normalizeLyricsTitle('【Official MV】Song Title (Lyrics Video) 🎵'),
   'Song Title',
@@ -68,6 +118,101 @@ await withFetch([candidate()], async () => {
   assert.equal(result.autoMatch?.id, 1)
 })
 
+await withProviderFetch(
+  { lrclib: [candidate()], lyricaSynced: lyricaPayload() },
+  async (calls) => {
+    const result = await new LyricsService().lookup(track())
+    assert.equal(result.autoMatch?.provider, 'lrclib')
+    assert.equal(calls.lyrica, 0)
+  },
+)
+
+await withProviderFetch(
+  { lrclib: [], lyricaSynced: lyricaPayload() },
+  async (calls) => {
+    const result = await new LyricsService().lookup(track())
+    assert.equal(calls.lyrica, 1)
+    assert.equal(result.candidates[0]?.provider, 'lyrica')
+    assert.equal(result.candidates[0]?.sourceLabel, 'Lyrica · YouTube Music')
+    assert.match(result.candidates[0]?.syncedLyrics ?? '', /\[00:01\.250\]Second line/)
+    assert.equal(result.autoMatch, undefined)
+  },
+)
+
+await withProviderFetch(
+  {
+    lrclib: [],
+    lyricaSynced: { status: 'error', error: { message: 'not found' } },
+    lyricaPlain: lyricaPayload({
+      source: 'netease',
+      timed_lyrics: undefined,
+      plain_lyrics: undefined,
+      lyrics: '[Verse 1]\nPlain fallback lyrics',
+    }),
+  },
+  async () => {
+    const result = await new LyricsService().lookup(track())
+    assert.equal(
+      result.candidates[0]?.plainLyrics,
+      '[Verse 1]\nPlain fallback lyrics',
+    )
+    assert.equal(result.candidates[0]?.syncedLyrics, undefined)
+    assert.equal(result.candidates[0]?.sourceLabel, 'Lyrica · NetEase')
+  },
+)
+
+await withProviderFetch(
+  {
+    lrclib: [
+      candidate({
+        trackName: 'Unrelated title',
+        plainLyrics: 'Same lyrics body',
+        syncedLyrics: undefined,
+      }),
+    ],
+    lyricaSynced: lyricaPayload({
+      plain_lyrics: 'Same lyrics body',
+      timed_lyrics: undefined,
+      lyrics: 'Same lyrics body',
+    }),
+  },
+  async () => {
+    const result = await new LyricsService().lookup(track())
+    assert.equal(result.candidates.length, 1)
+    assert.equal(result.candidates[0]?.provider, 'lrclib')
+  },
+)
+
+await withProviderFetch(
+  { lrclib: [], lyricaStatus: 500 },
+  async () => {
+    const result = await new LyricsService().lookup(track())
+    assert.equal(result.candidates.length, 0)
+  },
+)
+
+await withProviderFetch(
+  { lrclib: [], lyricaSynced: lyricaPayload() },
+  async (calls) => {
+    const service = new LyricsService()
+    await service.lookup(track())
+    await service.lookup(track())
+    assert.equal(calls.lyrica, 1)
+  },
+)
+
+await withProviderFetch(
+  {
+    lrclib: [],
+    lyricaSynced: lyricaPayload({ source: 'lrclib' }),
+  },
+  async () => {
+    const result = await new LyricsService().lookup(track())
+    assert.equal(result.autoMatch?.provider, 'lyrica')
+    assert.equal(result.autoMatch?.providerSource, 'lrclib')
+  },
+)
+
 await withFetch(
   [candidate({ trackName: '夜に駆ける', artistName: 'YOASOBI', albumName: '' })],
   async () => {
@@ -79,7 +224,7 @@ await withFetch(
       }),
     )
     assert.equal(result.originalArtist, 'YOASOBI')
-    assert.equal(result.status, 'low-confidence')
+    assert.equal(result.status, 'low-confidence', 'Japanese cover must stay manual')
     assert.equal(result.candidates[0]?.trackName, '夜に駆ける')
   },
 )
@@ -88,7 +233,7 @@ await withFetch([candidate({ trackName: 'Song', artistName: 'Singer' })], async 
   const result = await new LyricsService().lookup(
     track({ title: 'Song - cover', artist: 'Cover Artist', album: '' }),
   )
-  assert.equal(result.status, 'low-confidence')
+  assert.equal(result.status, 'low-confidence', 'cover must stay manual')
   assert.equal(result.candidates.length, 1)
 })
 
@@ -101,7 +246,7 @@ await withFetch([candidate({ trackName: 'Smile', artistName: 'Artist' })], async
 
 await withFetch([candidate()], async () => {
   const result = await new LyricsService().lookup(track({ duration: 3600 }))
-  assert.equal(result.status, 'low-confidence')
+  assert.equal(result.status, 'low-confidence', 'long duration mismatch must stay manual')
   assert.equal(result.autoMatch, undefined)
   assert.equal(result.candidates.length, 1)
 })
@@ -119,8 +264,9 @@ await withFetch([candidate({ duration: 188 })], async () => {
 
 await withFetch([candidate(), candidate({ id: 2 })], async () => {
   const result = await new LyricsService().lookup(track())
-  assert.equal(result.status, 'low-confidence')
-  assert.equal(result.autoMatch, undefined)
+  assert.equal(result.status, 'found')
+  assert.equal(result.candidates.length, 1)
+  assert.equal(result.autoMatch?.id, 1)
 })
 
 await withFetch(429, async () => {

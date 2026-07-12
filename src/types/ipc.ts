@@ -1,5 +1,7 @@
 import type {
   AppData,
+  AutoSyncAvailability,
+  AutoSyncJob,
   DataTransferResult,
   LyricsResult,
   LyricsCandidate,
@@ -51,6 +53,14 @@ export const IPC = {
   lyricsSyncGet: 'lyrics-sync:get',
   lyricsSyncSave: 'lyrics-sync:save',
   lyricsSyncClear: 'lyrics-sync:clear',
+  lyricsAutoSyncGetAvailability: 'lyrics-auto-sync:get-availability',
+  lyricsAutoSyncStart: 'lyrics-auto-sync:start',
+  lyricsAutoSyncCancel: 'lyrics-auto-sync:cancel',
+  lyricsAutoSyncGetActiveJob: 'lyrics-auto-sync:get-active-job',
+  lyricsAutoSyncDiscard: 'lyrics-auto-sync:discard',
+  lyricsAutoSyncProgress: 'lyrics-auto-sync:progress',
+  lyricsAutoSyncCompleted: 'lyrics-auto-sync:completed',
+  lyricsAutoSyncFailed: 'lyrics-auto-sync:failed',
   revealTrack: 'library:reveal-track',
   openMiniPlayer: 'window:open-mini',
   showMainWindow: 'window:show-main',
@@ -129,8 +139,22 @@ export interface ElectronApi {
   clearLyricsCache: () => Promise<void>
   reloadLyrics: (trackId: string) => Promise<LyricsResult>
   getLyricsSyncProfile: (trackId: string) => Promise<LyricsSyncProfile | null>
-  saveLyricsSyncProfile: (profile: LyricsSyncProfile) => Promise<LyricsSyncProfile>
+  saveLyricsSyncProfile: (
+    profile: LyricsSyncProfile,
+  ) => Promise<LyricsSyncProfile>
   clearLyricsSyncProfile: (trackId: string) => Promise<void>
+  getLyricsAutoSyncAvailability: (
+    trackId: string,
+  ) => Promise<AutoSyncAvailability>
+  startLyricsAutoSync: (trackId: string) => Promise<AutoSyncJob>
+  cancelLyricsAutoSync: (jobId: string) => Promise<boolean>
+  getLyricsAutoSyncJob: (trackId: string) => Promise<AutoSyncJob | null>
+  discardLyricsAutoSync: (jobId: string) => Promise<boolean>
+  onLyricsAutoSyncProgress: (listener: (job: AutoSyncJob) => void) => () => void
+  onLyricsAutoSyncCompleted: (
+    listener: (job: AutoSyncJob) => void,
+  ) => () => void
+  onLyricsAutoSyncFailed: (listener: (job: AutoSyncJob) => void) => () => void
   revealTrack: (trackId: string) => Promise<boolean>
   openMiniPlayer: () => Promise<void>
   showMainWindow: () => Promise<void>

@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pulse Shelf automatic sync PoC output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "trackId",
+    "model",
+    "matchedLines",
+    "totalLines",
+    "confidence",
+    "anchors",
+    "unmatchedLines",
+    "lyricsSyncProfile",
+    "comparison",
+    "diagnostics",
+    "metrics"
+  ],
+  "$defs": {
+    "trackId": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "profileAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lyricTimeMs", "audioTimeMs"],
+      "properties": {
+        "lyricTimeMs": { "type": "integer", "minimum": 0 },
+        "audioTimeMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "detailedAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lineIndex",
+        "lyricTimeMs",
+        "audioTimeMs",
+        "confidence",
+        "whisperText"
+      ],
+      "properties": {
+        "lineIndex": { "type": "integer", "minimum": 0 },
+        "lyricTimeMs": { "type": "integer", "minimum": 0 },
+        "audioTimeMs": { "type": "integer", "minimum": 0 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "whisperText": { "type": "string" }
+      }
+    },
+    "wordToken": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "start_ms", "end_ms", "probability"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "start_ms": { "type": "integer", "minimum": 0 },
+        "end_ms": { "type": "integer", "minimum": 0 },
+        "probability": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "gpuMemory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baselineMiB",
+        "peakMiB",
+        "peakIncrementMiB",
+        "phasePeaksMiB"
+      ],
+      "properties": {
+        "baselineMiB": { "type": "integer", "minimum": 0 },
+        "peakMiB": { "type": "integer", "minimum": 0 },
+        "peakIncrementMiB": { "type": "integer", "minimum": 0 },
+        "phasePeaksMiB": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  },
+  "properties": {
+    "trackId": { "$ref": "#/$defs/trackId" },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["separator", "whisper"],
+      "properties": {
+        "separator": { "type": "string", "minLength": 1 },
+        "whisper": { "type": "string", "minLength": 1 }
+      }
+    },
+    "matchedLines": { "type": "integer", "minimum": 0 },
+    "totalLines": { "type": "integer", "minimum": 2 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "anchors": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/detailedAnchor" }
+    },
+    "unmatchedLines": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "integer", "minimum": 0 }
+    },
+    "lyricsSyncProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackId", "offsetMs", "anchors", "updatedAt"],
+      "properties": {
+        "trackId": { "$ref": "#/$defs/trackId" },
+        "offsetMs": { "const": 0 },
+        "anchors": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/profileAnchor" }
+        },
+        "updatedAt": { "const": 0 }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "beforeMedianAbsErrorMs",
+        "afterLeaveOneOutMedianAbsErrorMs"
+      ],
+      "properties": {
+        "beforeMedianAbsErrorMs": { "type": ["integer", "null"], "minimum": 0 },
+        "afterLeaveOneOutMedianAbsErrorMs": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "whisperTokens",
+        "bestConfidenceByLine",
+        "temporalOutlierLines"
+      ],
+      "properties": {
+        "whisperTokens": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/wordToken" }
+        },
+        "bestConfidenceByLine": {
+          "type": "array",
+          "items": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "temporalOutlierLines": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "vocalSeparationSeconds",
+        "whisperSeconds",
+        "matchingSeconds",
+        "totalSeconds",
+        "whisperTokens",
+        "gpuMemory"
+      ],
+      "properties": {
+        "vocalSeparationSeconds": { "type": "number", "minimum": 0 },
+        "whisperSeconds": { "type": "number", "minimum": 0 },
+        "matchingSeconds": { "type": "number", "minimum": 0 },
+        "totalSeconds": { "type": "number", "minimum": 0 },
+        "whisperTokens": { "type": "integer", "minimum": 0 },
+        "gpuMemory": { "$ref": "#/$defs/gpuMemory" }
+      }
+    }
+  }
+}

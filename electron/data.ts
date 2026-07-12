@@ -199,6 +199,16 @@ export const appDataSchema = z.object({
         )
         .max(100),
       updatedAt: z.number().finite().nonnegative(),
+      source: z.enum(['manual', 'ai']).optional(),
+      autoSyncMetadata: z
+        .object({
+          model: z.string().trim().min(1).max(200),
+          matchedLines: z.number().int().nonnegative(),
+          totalLines: z.number().int().positive(),
+          confidence: z.number().finite().min(0).max(1),
+          processingTimeMs: z.number().finite().nonnegative(),
+        })
+        .optional(),
     }),
   ),
   settings: settingsSchema,
@@ -265,7 +275,8 @@ const storedDataSchema = appDataSchema.extend({
           filePath: z.string().min(1).max(32_767),
         }),
         lyrics: appDataSchema.shape.lyrics.valueType.optional(),
-        lyricsSyncProfile: appDataSchema.shape.lyricsSyncProfiles.valueType.optional(),
+        lyricsSyncProfile:
+          appDataSchema.shape.lyricsSyncProfiles.valueType.optional(),
       }),
     )
     .max(200_000),

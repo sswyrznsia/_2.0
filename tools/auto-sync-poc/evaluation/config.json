@@ -1,0 +1,12 @@
+{
+  "whisperModel": "large-v3",
+  "confidenceThreshold": 0.66,
+  "fatalWrongSectionErrorMs": 3000,
+  "minimumCasesForRecommendation": 3,
+  "integrationBenchmarks": {
+    "minimumMatchRate": 0.75,
+    "maximumMedianTimingErrorMs": 500,
+    "maximumP90TimingErrorMs": 1500,
+    "maximumFatalWrongSectionRate": 0.1
+  }
+}

@@ -119,6 +119,104 @@ export interface LyricsSyncProfile {
   offsetMs: number
   anchors: LyricsSyncAnchor[]
   updatedAt: number
+  source?: 'manual' | 'ai'
+  autoSyncMetadata?: {
+    model: string
+    matchedLines: number
+    totalLines: number
+    confidence: number
+    processingTimeMs: number
+  }
+}
+
+export type AutoSyncStage =
+  | 'preparing'
+  | 'separating'
+  | 'releasing-separator'
+  | 'transcribing'
+  | 'matching'
+  | 'building-anchors'
+  | 'validating'
+
+export type AutoSyncJobStatus = 'running' | 'completed' | 'failed' | 'cancelled'
+
+export type AutoSyncErrorCode =
+  | 'python-missing'
+  | 'package-missing'
+  | 'separator-model-missing'
+  | 'whisper-model-missing'
+  | 'cuda-unavailable'
+  | 'gpu-out-of-memory'
+  | 'ffmpeg-missing'
+  | 'audio-missing'
+  | 'plain-lyrics-missing'
+  | 'synced-lyrics-missing'
+  | 'separation-failed'
+  | 'transcription-failed'
+  | 'matching-failed'
+  | 'profile-invalid'
+  | 'duplicate-job'
+  | 'cancelled'
+  | 'process-failed'
+  | 'service-unavailable'
+
+export interface AutoSyncAvailability {
+  available: boolean
+  device: 'cuda' | 'cpu' | null
+  gpuName?: string
+  modelName?: string
+  missingRequirements: string[]
+  reason?: string
+  checkedAt: number
+}
+
+export interface AutoSyncLineConfidence {
+  lineIndex: number
+  confidence: number
+}
+
+export interface AutoSyncResult {
+  trackId: string
+  model: {
+    separator: string
+    whisper: string
+  }
+  matchedLines: number
+  totalLines: number
+  matchRate: number
+  confidence: number
+  lyricsSyncProfile: LyricsSyncProfile
+  unmatchedLines: number[]
+  temporalOutlierLines: number[]
+  lowConfidenceLines: AutoSyncLineConfidence[]
+  processingTimeMs: number
+  peakGpuMemoryMiB: number | null
+  canApply: boolean
+  qualityMessage?: string
+  cacheHit: boolean
+}
+
+export interface AutoSyncJobError {
+  code: AutoSyncErrorCode
+  message: string
+}
+
+export interface AutoSyncJob {
+  jobId: string
+  trackId: string
+  status: AutoSyncJobStatus
+  stage: AutoSyncStage
+  overallProgress: number | null
+  stageProgress: number | null
+  completedStages: number
+  totalStages: number
+  elapsedMs: number
+  modelName?: string
+  message?: string
+  result?: AutoSyncResult
+  error?: AutoSyncJobError
+  createdAt: number
+  updatedAt: number
 }
 
 export interface LyricsCandidate {

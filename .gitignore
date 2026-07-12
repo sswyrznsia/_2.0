@@ -14,6 +14,19 @@ release*/
 dist-ssr
 *.local
 
+# Local-only automatic lyrics sync PoC runtimes and model caches
+.venv-auto-sync/
+.poc-cache/
+.poc-tmp/
+tools/auto-sync-poc/results/*.json
+tools/auto-sync-poc/evaluation/cases/*.json
+!tools/auto-sync-poc/evaluation/cases/*.example.json
+tools/auto-sync-poc/evaluation/ground-truth/*.json
+!tools/auto-sync-poc/evaluation/ground-truth/*.example.json
+tools/auto-sync-poc/evaluation/results/*.json
+__pycache__/
+*.pyc
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

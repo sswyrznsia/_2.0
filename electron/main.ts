@@ -1,5 +1,13 @@
 import { createReadStream, existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
@@ -63,7 +71,9 @@ import {
   searchTrackLyrics,
 } from './ipc/lyrics'
 import { registerMediaImportIpc } from './ipc/mediaImport'
+import { registerAutoSyncIpc } from './ipc/autoSync'
 import { MediaImportService } from './import/mediaImportService'
+import { AutoSyncService } from './autoSync/autoSyncService'
 import { IPC } from '../src/types/ipc'
 import type {
   MediaImportJob,
@@ -76,10 +86,7 @@ import type {
   TaskbarToggleSettingsPatch,
 } from '../src/types/models'
 import { extractYouTubeVideoId, isYouTubeVideoUrl } from '../src/utils/youtube'
-import {
-  YouTubeExtensionManager,
-  YOUTUBE_PARTITION,
-} from './youtubeExtension'
+import { YouTubeExtensionManager, YOUTUBE_PARTITION } from './youtubeExtension'
 import {
   computeTaskbarToggleBounds,
   computeTaskbarHorizontalRange,
@@ -139,11 +146,7 @@ const commandSchema = z.discriminatedUnion('type', [
     value: z.number().finite().nonnegative(),
   }),
 ])
-const taskbarModeActionSchema = z.enum([
-  'show-pulse',
-  'show-windows',
-  'toggle',
-])
+const taskbarModeActionSchema = z.enum(['show-pulse', 'show-windows', 'toggle'])
 const taskbarToggleScreenXSchema = z
   .number()
   .finite()
@@ -194,21 +197,23 @@ let lastTrayKey = ''
 let mediaIndex = new Map<string, StoredTrack>()
 let boundsSaveTimer: NodeJS.Timeout | undefined
 let mediaImportService: MediaImportService | null = null
+let autoSyncService: AutoSyncService | null = null
 let youtubeExtensionManager: YouTubeExtensionManager | null = null
 let youtubeViewBounds: Rectangle | null = null
 let taskbarToggleDrag:
   { startScreenX: number; startWindowX: number; displayId: number } | undefined
 let pulseTaskbarVisible = false
 let taskbarRepositionListener: (() => void) | undefined
-let taskbarBrowserWindowBlurListener:
-  | (() => void)
-  | undefined
+let taskbarBrowserWindowBlurListener: (() => void) | undefined
 const taskbarToggleRetopTimers = new Set<NodeJS.Timeout>()
 let taskbarToggleRecoveryTimer: NodeJS.Timeout | undefined
 let taskbarToggleVisualBounds: Rectangle | null = null
 let taskbarLastEnabled = false
 let taskbarRegisteredShortcutCount = 0
 let taskbarShortcutEnabled: boolean | undefined
+let autoSyncShutdownComplete = false
+let autoSyncShutdownPromise: Promise<void> | null = null
+let quitCleanupComplete = false
 const taskbarEdges = new Map<number, TaskbarEdge>()
 
 const preloadPath = path.join(import.meta.dirname, 'preload.mjs')
@@ -238,6 +243,47 @@ const assetPath = (name: string) =>
 
 function refreshMediaIndex() {
   mediaIndex = new Map(getStoredData().tracks.map((track) => [track.id, track]))
+}
+
+async function readAutoSyncSidecar(
+  filePath: string,
+  extension: '.lrc' | '.txt',
+) {
+  const sidecarPath = `${filePath.slice(0, -path.extname(filePath).length)}${extension}`
+  try {
+    const fileStats = await stat(sidecarPath)
+    if (!fileStats.isFile() || fileStats.size > 2 * 1024 * 1024)
+      return undefined
+    const content = (await readFile(sidecarPath, 'utf8'))
+      .replace(/^\uFEFF/, '')
+      .trim()
+    return content || undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function resolveAutoSyncTrack(trackId: string) {
+  const data = getStoredData()
+  const track = data.tracks.find((item) => item.id === trackId)
+  if (!track) return null
+  const selected = data.lyrics[trackId]
+  const syncedLyrics =
+    selected?.syncedLyrics ??
+    (selected ? undefined : await readAutoSyncSidecar(track.filePath, '.lrc'))
+  const plainLyrics =
+    selected?.plainLyrics ??
+    (selected ? undefined : await readAutoSyncSidecar(track.filePath, '.txt'))
+  return {
+    trackId,
+    audioPath: track.filePath,
+    fileSize: track.fileSize,
+    modifiedAt: track.modifiedAt,
+    plainLyrics,
+    syncedLyrics,
+    provider: selected?.provider ?? selected?.source,
+    providerSource: selected?.providerSource,
+  }
 }
 
 function assertMainSender(event: IpcMainInvokeEvent | IpcMainEvent) {
@@ -423,8 +469,7 @@ async function loadRenderer(
   window: BrowserWindow,
   mode: 'main' | 'mini' | 'taskbarMode' | 'taskbarToggle' = 'main',
 ) {
-  const query =
-    mode === 'main' ? '' : `?${mode}=1`
+  const query = mode === 'main' ? '' : `?${mode}=1`
   const devUrl = process.env.VITE_DEV_SERVER_URL
   if (
     !app.isPackaged &&
@@ -678,10 +723,7 @@ function reinforceTaskbarToggleWindow() {
 function startTaskbarToggleRecovery() {
   stopTaskbarToggleRecovery()
   reinforceTaskbarToggleWindow()
-  taskbarToggleRecoveryTimer = setInterval(
-    reinforceTaskbarToggleWindow,
-    1_500,
-  )
+  taskbarToggleRecoveryTimer = setInterval(reinforceTaskbarToggleWindow, 1_500)
 }
 
 function showTaskbarToggleWindow() {
@@ -719,7 +761,8 @@ function startTaskbarToggleDrag(screenX: number) {
   const display = screen.getDisplayMatching(window.getBounds())
   taskbarToggleDrag = {
     startScreenX: screenX,
-    startWindowX: taskbarToggleVisualBounds?.x ?? taskbarTogglePlacement(display).x,
+    startWindowX:
+      taskbarToggleVisualBounds?.x ?? taskbarTogglePlacement(display).x,
     displayId: display.id,
   }
 }
@@ -823,10 +866,7 @@ function taskbarWindowOptions(bounds: Rectangle) {
   }
 }
 
-async function waitForTaskbarRenderer(
-  window: BrowserWindow,
-  selector: string,
-) {
+async function waitForTaskbarRenderer(window: BrowserWindow, selector: string) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (window.isDestroyed()) return false
     const mounted = await window.webContents.executeJavaScript(
@@ -853,8 +893,7 @@ async function createTaskbarModeWindow() {
   window.setMenuBarVisibility(false)
   window.on('closed', () => {
     taskbarModeWindow = null
-    if (!isQuitting && pulseTaskbarVisible)
-      void setPulseTaskbarVisible(false)
+    if (!isQuitting && pulseTaskbarVisible) void setPulseTaskbarVisible(false)
   })
   try {
     await loadRenderer(window, 'taskbarMode')
@@ -893,7 +932,10 @@ async function createTaskbarModeWindow() {
     window.setAlwaysOnTop(true, 'screen-saver')
     setWindowBounds(window, taskbarModeBounds())
   } catch (error) {
-    log.error('Pulse Shelf taskbar mode failed; restoring Windows taskbar', error)
+    log.error(
+      'Pulse Shelf taskbar mode failed; restoring Windows taskbar',
+      error,
+    )
     if (!window.isDestroyed()) window.destroy()
     throw error
   }
@@ -985,8 +1027,9 @@ function registerTaskbarShortcut(settings: Settings) {
   taskbarRegisteredShortcutCount = 0
   if (!shouldRegister) return
   if (
-    globalShortcut.register(TASKBAR_SHORTCUT, () =>
-      void performTaskbarModeAction('toggle'),
+    globalShortcut.register(
+      TASKBAR_SHORTCUT,
+      () => void performTaskbarModeAction('toggle'),
     )
   )
     taskbarRegisteredShortcutCount = 1
@@ -1225,6 +1268,7 @@ function registerIpc() {
   })
   ipcMain.handle(IPC.resetData, async (event) => {
     assertMainSender(event)
+    await autoSyncService?.cancelActiveAndDrain()
     await mediaImportService?.cancelAllAndDrain()
     const data = resetData()
     applySettings(data.settings)
@@ -1242,6 +1286,7 @@ function registerIpc() {
   })
   ipcMain.handle(IPC.importData, async (event) => {
     assertMainSender(event)
+    await autoSyncService?.cancelActiveAndDrain()
     await mediaImportService?.cancelAllAndDrain()
     const result = await importAppData()
     if (result.data) {
@@ -1328,6 +1373,9 @@ function registerIpc() {
     syncedLyrics: z.string().max(2_000_000).optional(),
     plainLyrics: z.string().max(2_000_000).optional(),
     instrumental: z.boolean(),
+    provider: z.enum(['lrclib', 'lyrica']).optional(),
+    providerSource: z.string().trim().min(1).max(60).optional(),
+    sourceLabel: z.string().trim().min(1).max(100).optional(),
   })
   const lyricsSearchQuerySchema = z.object({
     title: z.string().trim().max(500).optional(),
@@ -1381,14 +1429,30 @@ function registerIpc() {
       )
       .max(100),
     updatedAt: z.number().finite().nonnegative(),
+    source: z.enum(['manual', 'ai']).optional(),
+    autoSyncMetadata: z
+      .object({
+        model: z.string().trim().min(1).max(200),
+        matchedLines: z.number().int().nonnegative(),
+        totalLines: z.number().int().positive(),
+        confidence: z.number().finite().min(0).max(1),
+        processingTimeMs: z.number().finite().nonnegative(),
+      })
+      .optional(),
   })
   ipcMain.handle(IPC.lyricsSyncGet, (event, trackId: unknown) => {
     assertTrustedSender(event)
     return getLyricsSyncProfile(trackIdSchema.parse(trackId))
   })
-  ipcMain.handle(IPC.lyricsSyncSave, (event, profile: unknown) => {
+  ipcMain.handle(IPC.lyricsSyncSave, async (event, profile: unknown) => {
     assertTrustedSender(event)
-    return saveLyricsSyncProfile(lyricsSyncProfileSchema.parse(profile))
+    const parsed = lyricsSyncProfileSchema.parse(profile)
+    if (
+      parsed.source === 'ai' &&
+      autoSyncService?.getJob(parsed.trackId)?.status === 'completed'
+    )
+      await autoSyncService.assertResultCurrent(parsed.trackId)
+    return saveLyricsSyncProfile(parsed)
   })
   ipcMain.handle(IPC.lyricsSyncClear, (event, trackId: unknown) => {
     assertTrustedSender(event)
@@ -1554,10 +1618,12 @@ function registerIpc() {
   })
   ipcMain.handle(IPC.youtubeExtensionGetStatus, (event) => {
     assertMainSender(event)
-    return youtubeExtensionManager?.getStatus() ?? {
-      enabled: false,
-      loadState: 'not-configured' as const,
-    }
+    return (
+      youtubeExtensionManager?.getStatus() ?? {
+        enabled: false,
+        loadState: 'not-configured' as const,
+      }
+    )
   })
   ipcMain.handle(IPC.youtubeExtensionSelectFolder, async (event) => {
     assertMainSender(event)
@@ -1662,6 +1728,9 @@ function registerIpc() {
     assertMainSender,
     currentYouTubeUrl: () => youtubeView?.webContents.getURL() || YOUTUBE_HOME,
   })
+  if (!autoSyncService)
+    throw new Error('Automatic lyrics sync service is not initialized')
+  registerAutoSyncIpc({ service: autoSyncService, assertMainSender })
 }
 
 async function waitForRenderer(selector: string) {
@@ -1994,9 +2063,8 @@ if (!gotSingleInstanceLock) {
               'pulse-youtube-extension',
             )
         const youtubeSession = session.fromPartition(YOUTUBE_PARTITION)
-        const extension = await youtubeSession.extensions.loadExtension(
-          extensionPath,
-        )
+        const extension =
+          await youtubeSession.extensions.loadExtension(extensionPath)
         if (
           !youtubeSession.extensions
             .getAllExtensions()
@@ -2273,6 +2341,57 @@ if (!gotSingleInstanceLock) {
     }
     log.initialize()
     initializeStore()
+    const autoSyncWorkspace = app.isPackaged
+      ? process.resourcesPath
+      : path.resolve(import.meta.dirname, '..')
+    const allowAutoSyncTestWorker =
+      process.env.PULSE_SHELF_UI_TEST === '1' || Boolean(testUserData)
+    const testWorkerCommand = allowAutoSyncTestWorker
+      ? process.env.PULSE_SHELF_AUTO_SYNC_TEST_COMMAND
+      : undefined
+    const testWorkerScript = allowAutoSyncTestWorker
+      ? process.env.PULSE_SHELF_AUTO_SYNC_TEST_SCRIPT
+      : undefined
+    autoSyncService = new AutoSyncService({
+      workspaceRoot: autoSyncWorkspace,
+      workRoot: path.join(app.getPath('userData'), 'auto-sync'),
+      resolveTrack: resolveAutoSyncTrack,
+      emit: (event, job) => {
+        if (!mainWindow || mainWindow.isDestroyed()) return
+        const channel =
+          event === 'completed'
+            ? IPC.lyricsAutoSyncCompleted
+            : event === 'failed'
+              ? IPC.lyricsAutoSyncFailed
+              : IPC.lyricsAutoSyncProgress
+        mainWindow.webContents.send(channel, job)
+      },
+      logger: {
+        info: (message, details) => log.info(message, details ?? ''),
+        warn: (message, details) => log.warn(message, details ?? ''),
+        error: (message, details) => log.error(message, details ?? ''),
+      },
+      workerOverride:
+        testWorkerCommand && testWorkerScript
+          ? {
+              command: testWorkerCommand,
+              script: testWorkerScript,
+              gpuName: 'Auto-sync UI test GPU',
+            }
+          : undefined,
+      availabilityOverride:
+        testUserData &&
+        process.env.PULSE_SHELF_AUTO_SYNC_LIVE_TEST !== '1' &&
+        !(testWorkerCommand && testWorkerScript)
+          ? {
+              available: false,
+              device: null,
+              missingRequirements: ['service'],
+              reason: '이 테스트에서는 AI 자동 싱크 환경 확인을 생략합니다.',
+              checkedAt: Date.now(),
+            }
+          : undefined,
+    })
     youtubeExtensionManager = new YouTubeExtensionManager(
       () => session.fromPartition(YOUTUBE_PARTITION),
       reloadYouTubeViewForExtension,
@@ -2347,8 +2466,23 @@ process.on('uncaughtException', (error) =>
 process.on('unhandledRejection', (reason) =>
   log.error('Unhandled rejection', reason),
 )
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
   isQuitting = true
+  if (autoSyncService && !autoSyncShutdownComplete) {
+    event.preventDefault()
+    autoSyncShutdownPromise ??= autoSyncService
+      .shutdown()
+      .catch((error: unknown) =>
+        log.error('Automatic lyrics sync shutdown failed', error),
+      )
+      .finally(() => {
+        autoSyncShutdownComplete = true
+        app.quit()
+      })
+    return
+  }
+  if (quitCleanupComplete) return
+  quitCleanupComplete = true
   clearTaskbarToggleRetopTimers()
   stopTaskbarToggleRecovery()
   if (taskbarRepositionListener) {
