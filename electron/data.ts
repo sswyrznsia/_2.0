@@ -63,6 +63,8 @@ export const createDefaultData = (): StoredAppData => ({
     taskbarToggleCustomRightGap: 362,
     taskbarModeShortcuts: true,
     taskbarModeOpacity: 1,
+    taskbarLyricsEnabled: true,
+    taskbarLyricsDisplay: 'current-next',
   },
   lastPage: 'home',
   playerSession: {
@@ -137,6 +139,8 @@ export const settingsSchema = z.object({
   taskbarToggleCustomRightGap: z.number().int().min(192).max(1_920),
   taskbarModeShortcuts: z.boolean(),
   taskbarModeOpacity: z.number().min(0.85).max(1),
+  taskbarLyricsEnabled: z.boolean(),
+  taskbarLyricsDisplay: z.enum(['off', 'current', 'current-next']),
 })
 
 export const appDataSchema = z.object({
@@ -398,6 +402,9 @@ function migrateData(value: unknown): unknown {
         oldSettings.taskbarPlayerShortcuts ??
         defaults.settings.taskbarModeShortcuts,
       taskbarModeOpacity: oldSettings.taskbarModeOpacity ?? 1,
+      taskbarLyricsEnabled: oldSettings.taskbarLyricsEnabled ?? true,
+      taskbarLyricsDisplay:
+        oldSettings.taskbarLyricsDisplay ?? 'current-next',
     }
     if (settings.taskbarTogglePosition === 'center')
       settings.taskbarTogglePosition = 'custom'

@@ -396,7 +396,6 @@ svg {
   color: #0b1020;
   background: #fff;
   opacity: 0;
-  pointer-events: none;
   translate: -50% -50%;
   transition: opacity 140ms ease;
 }
@@ -2685,9 +2684,10 @@ kbd {
   display: grid;
   width: 100%;
   height: 100%;
-  grid-template-columns: minmax(280px, 1fr) minmax(520px, 1.35fr) minmax(
-      270px,
-      1fr
+  grid-template-columns:
+    minmax(210px, 0.7fr) minmax(360px, 1.1fr) minmax(300px, 500px) minmax(
+      220px,
+      0.65fr
     );
   align-items: center;
   gap: 14px;
@@ -2777,6 +2777,59 @@ kbd {
 .taskbar-mode__tools {
   justify-content: flex-end;
   gap: 3px;
+}
+.taskbar-mode__lyrics {
+  min-width: 300px;
+  max-width: 500px;
+  overflow: hidden;
+}
+.taskbar-mode__lyrics strong,
+.taskbar-mode__lyrics span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.taskbar-mode__lyrics strong {
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 19px;
+  text-shadow: 0 1px 8px rgba(120, 162, 255, 0.22);
+  animation: taskbar-lyrics-fade 180ms ease-out;
+}
+.taskbar-mode__lyrics span {
+  opacity: 0.65;
+  font-size: 13px;
+  line-height: 16px;
+}
+@keyframes taskbar-lyrics-fade {
+  from { opacity: 0.35; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (max-width: 1120px) {
+  .taskbar-mode {
+    grid-template-columns:
+      minmax(150px, 0.65fr) minmax(260px, 1fr) minmax(220px, 320px) minmax(
+        205px,
+        0.65fr
+      );
+  }
+  .taskbar-mode__lyrics {
+    min-width: 220px;
+    max-width: 320px;
+  }
+}
+@media (max-width: 760px) {
+  .taskbar-mode {
+    grid-template-columns: minmax(150px, 0.8fr) minmax(250px, 1.2fr) minmax(
+      205px,
+      0.65fr
+    );
+  }
+  .taskbar-mode__lyrics {
+    display: none;
+  }
 }
 .taskbar-mode .icon-button {
   width: 27px;

@@ -76,6 +76,8 @@ export interface Settings {
   taskbarToggleCustomRightGap: number
   taskbarModeShortcuts: boolean
   taskbarModeOpacity: number
+  taskbarLyricsEnabled: boolean
+  taskbarLyricsDisplay: 'off' | 'current' | 'current-next'
 }
 
 export interface TaskbarModeState {
@@ -390,6 +392,14 @@ export interface PlayerSnapshot {
   isMuted: boolean
   shuffle: boolean
   repeatMode: RepeatMode
+  lyrics?: TaskbarLyricsSnapshot
+}
+
+export interface TaskbarLyricsSnapshot {
+  currentLine?: string
+  nextLine?: string
+  hasSync: boolean
+  source?: 'synced' | 'generated'
 }
 
 export type PlayerCommand =

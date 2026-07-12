@@ -90,6 +90,12 @@ import type {
   TaskbarToggleSettingsPatch,
 } from '../src/types/models'
 import { extractYouTubeVideoId, isYouTubeVideoUrl } from '../src/utils/youtube'
+import { findActiveLyricLineIndex, parseLrc } from '../src/utils/lyrics'
+import { adjustLyricTimeMs } from '../src/utils/lyricsSync'
+import {
+  splitGeneratedLyricsText,
+  validateGeneratedLyricsTimeline,
+} from '../src/utils/generatedLyricsTimeline'
 import { YouTubeExtensionManager, YOUTUBE_PARTITION } from './youtubeExtension'
 import {
   computeTaskbarToggleBounds,
@@ -176,6 +182,80 @@ const snapshotSchema = z.object({
   shuffle: z.boolean(),
   repeatMode: z.enum(['off', 'one', 'all']),
 })
+
+function taskbarLyricsSnapshot(snapshot: PlayerSnapshot, settings: Settings) {
+  const hidden = { hasSync: false as const }
+  if (
+    !settings.taskbarLyricsEnabled ||
+    settings.taskbarLyricsDisplay === 'off' ||
+    !snapshot.currentTrack
+  )
+    return hidden
+  const data = getStoredData()
+  const trackId = snapshot.currentTrack.id
+  const lyrics = data.lyrics[trackId]
+  if (!lyrics || lyrics.instrumental) return hidden
+
+  if (lyrics.syncedLyrics) {
+    const profile = data.lyricsSyncProfiles[trackId]
+    const lines = parseLrc(lyrics.syncedLyrics).map((line) => ({
+      text: line.text,
+      time:
+        adjustLyricTimeMs(Math.round(line.time * 1_000), profile) / 1_000,
+    }))
+    const activeIndex = findActiveLyricLineIndex(
+      lines.map((line) => line.time),
+      snapshot.currentTime,
+    )
+    if (activeIndex < 0 || !lines[activeIndex]?.text.trim()) return hidden
+    const nextLine =
+      settings.taskbarLyricsDisplay === 'current-next'
+        ? lines.slice(activeIndex + 1).find((line) => line.text.trim())?.text
+        : undefined
+    return {
+      hasSync: true as const,
+      source: 'synced' as const,
+      currentLine: lines[activeIndex].text,
+      nextLine,
+    }
+  }
+
+  if (!lyrics.plainLyrics) return hidden
+  const timeline = data.generatedLyricsTimelines[trackId]
+  if (!timeline) return hidden
+  try {
+    validateGeneratedLyricsTimeline(timeline, lyrics.plainLyrics)
+  } catch {
+    return hidden
+  }
+  const textLines = splitGeneratedLyricsText(lyrics.plainLyrics)
+  const timingByLine = new Map(
+    timeline.lines.map((line) => [line.lineIndex, line.audioTimeMs / 1_000]),
+  )
+  const activeIndex = findActiveLyricLineIndex(
+    textLines.map((_, index) => timingByLine.get(index)),
+    snapshot.currentTime,
+  )
+  if (activeIndex < 0 || !textLines[activeIndex]?.trim()) return hidden
+  const nextLine =
+    settings.taskbarLyricsDisplay === 'current-next'
+      ? textLines
+          .slice(activeIndex + 1)
+          .find((text, offset) =>
+            Boolean(text.trim() && timingByLine.has(activeIndex + offset + 1)),
+          )
+      : undefined
+  return {
+    hasSync: true as const,
+    source: 'generated' as const,
+    currentLine: textLines[activeIndex],
+    nextLine,
+  }
+}
+
+function withTaskbarLyrics(snapshot: PlayerSnapshot, settings: Settings): PlayerSnapshot {
+  return { ...snapshot, lyrics: taskbarLyricsSnapshot(snapshot, settings) }
+}
 const viewBoundsSchema = z.object({
   x: z.number().int().min(0).max(20_000),
   y: z.number().int().min(0).max(20_000),
@@ -1804,7 +1884,10 @@ function registerIpc() {
       const snapshotResult = snapshotSchema.safeParse(value)
       const settingsResult = settingsSchema.safeParse(rawSettings)
       if (!snapshotResult.success || !settingsResult.success) return
-      const snapshot = value as PlayerSnapshot
+      const snapshot = withTaskbarLyrics(
+        snapshotResult.data as unknown as PlayerSnapshot,
+        settingsResult.data,
+      )
       lastSnapshot = snapshot
       miniWindow?.webContents.send(IPC.playerSnapshot, snapshot)
       taskbarModeWindow?.webContents.send(IPC.playerSnapshot, snapshot)

@@ -179,6 +179,34 @@ export function SettingsPage() {
             <output>{Math.round(data.settings.taskbarModeOpacity * 100)}%</output>
           </span>
         </label>
+        <SettingToggle
+          label="현재 가사 표시"
+          description="작업표시줄 플레이어에 현재 재생 중인 동기화 가사를 표시합니다."
+          checked={data.settings.taskbarLyricsEnabled}
+          onChange={(value) => updateSettings({ taskbarLyricsEnabled: value })}
+        />
+        <label className="setting-row">
+          <span>
+            <strong>가사 표시</strong>
+            <small>동기화된 현재 줄과 다음 줄의 표시 방식을 선택합니다.</small>
+          </span>
+          <select
+            value={data.settings.taskbarLyricsDisplay}
+            disabled={!data.settings.taskbarLyricsEnabled}
+            onChange={(event) =>
+              updateSettings({
+                taskbarLyricsDisplay: event.target.value as
+                  | 'off'
+                  | 'current'
+                  | 'current-next',
+              })
+            }
+          >
+            <option value="off">끔</option>
+            <option value="current">현재 줄</option>
+            <option value="current-next">현재 + 다음 줄</option>
+          </select>
+        </label>
       </section>
       <section className="settings-section">
         <h2>화면</h2>

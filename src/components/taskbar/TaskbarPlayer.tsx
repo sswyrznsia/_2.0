@@ -61,6 +61,10 @@ export function TaskbarMode() {
   const track = player?.currentTrack
   const progressMax = Math.max(player?.duration ?? 0, 0.01)
   const currentTime = Math.min(player?.currentTime ?? 0, progressMax)
+  const lyrics = player?.lyrics
+  const lyricsTooltip = [lyrics?.currentLine, lyrics?.nextLine]
+    .filter(Boolean)
+    .join('\n')
 
   return (
     <main className="taskbar-mode" aria-label="Pulse Shelf 작업표시줄">
@@ -146,6 +150,18 @@ export function TaskbarMode() {
           <span>{formatTime(player?.duration ?? 0)}</span>
         </div>
       </div>
+
+      {lyrics?.hasSync && lyrics.currentLine && (
+        <div
+          className="taskbar-mode__lyrics"
+          data-taskbar-lyrics-source={lyrics.source}
+          title={lyricsTooltip}
+          aria-label="현재 가사"
+        >
+          <strong key={lyrics.currentLine}>{lyrics.currentLine}</strong>
+          {lyrics.nextLine && <span>{lyrics.nextLine}</span>}
+        </div>
+      )}
 
       <div className="taskbar-mode__tools">
         <IconButton

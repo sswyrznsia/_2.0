@@ -85,9 +85,19 @@ function testWav() {
   return buffer
 }
 
+function generatedLyricsHash(value) {
+  let hash = 0xcbf29ce484222325n
+  for (const byte of new TextEncoder().encode(value)) {
+    hash ^= BigInt(byte)
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n)
+  }
+  return hash.toString(16).padStart(16, '0')
+}
+
 function fixture(audioPath, nextAudioPath) {
   const id = 'a'.repeat(64)
   const nextId = 'b'.repeat(64)
+  const generatedLyrics = 'Generated first line\nGenerated second line'
   const now = Date.now()
   const track = (trackId, filePath, title, artist, addedAt) => ({
     id: trackId,
@@ -116,6 +126,38 @@ function fixture(audioPath, nextAudioPath) {
       libraryExclusions: [],
       playlists: [],
       recentTrackIds: [id, nextId],
+      lyrics: {
+        [id]: {
+          trackId: id,
+          source: 'manual',
+          syncedLyrics: '[00:00.000]今度こそ生き返れない そう思ったベッドの中で何度も何度も歌う長い日本語の歌詞です\n[00:00.500]そう思ったベッドの中',
+          plainLyrics: '今度こそ生き返れない そう思ったベッドの中で何度も何度も歌う長い日本語の歌詞です\nそう思ったベッドの中',
+          fetchedAt: now,
+          userSelected: true,
+        },
+        [nextId]: {
+          trackId: nextId,
+          source: 'manual-input',
+          plainLyrics: generatedLyrics,
+          fetchedAt: now,
+          userSelected: true,
+        },
+      },
+      lyricsSyncProfiles: {},
+      generatedLyricsTimelines: {
+        [nextId]: {
+          trackId: nextId,
+          source: 'manual',
+          lineCount: 2,
+          lyricsTextHash: generatedLyricsHash(generatedLyrics),
+          lines: generatedLyrics.split('\n').map((text, lineIndex) => ({
+            lineIndex,
+            textHash: generatedLyricsHash(text),
+            audioTimeMs: lineIndex * 500,
+          })),
+          createdAt: now,
+        },
+      },
       settings: {
         theme: 'dark', restoreLastPage: true, restoreQueue: true, autoplay: false,
         discordPresence: false, autoLaunch: false, closeBehavior: 'tray',
@@ -130,6 +172,8 @@ function fixture(audioPath, nextAudioPath) {
         taskbarToggleCustomRightGap: 362,
         taskbarModeShortcuts: true,
         taskbarModeOpacity: 1,
+        taskbarLyricsEnabled: true,
+        taskbarLyricsDisplay: 'current-next',
       },
       lastPage: 'home',
       playerSession: {
@@ -330,6 +374,61 @@ try {
     }))()`)
     if (initial.width !== initial.screenWidth || initial.y + initial.height !== initial.screenHeight || initial.title !== 'Layout Test Track' || initial.controls !== 5 || initial.tools !== 4 || !initial.progress || initial.opacity !== '1' || !initial.state.pulseTaskbarVisible || !initial.state.modeWindowVisible || initial.state.toggleWindowVisible || initial.state.registeredShortcutCount > 1)
       throw new Error(`Invalid taskbar mode: ${JSON.stringify(initial)}`)
+    const initialLyrics = await mode.evaluate(`(() => {
+      const root = document.querySelector('.taskbar-mode__lyrics')
+      return {
+        current: root?.querySelector('strong')?.textContent,
+        next: root?.querySelector('span')?.textContent,
+        source: root?.getAttribute('data-taskbar-lyrics-source'),
+        title: root?.getAttribute('title'),
+        width: root?.getBoundingClientRect().width,
+        textOverflow: root ? getComputedStyle(root.querySelector('strong')).textOverflow : '',
+        currentFontSize: root ? getComputedStyle(root.querySelector('strong')).fontSize : '',
+        nextFontSize: root ? getComputedStyle(root.querySelector('span')).fontSize : '',
+        nextOpacity: root ? getComputedStyle(root.querySelector('span')).opacity : '',
+      }
+    })()`)
+    if (
+      !initialLyrics.current?.startsWith('今度こそ生き返れない') ||
+      initialLyrics.next !== 'そう思ったベッドの中' ||
+      initialLyrics.source !== 'synced' ||
+      initialLyrics.width > 500 ||
+      initialLyrics.textOverflow !== 'ellipsis' ||
+      initialLyrics.currentFontSize !== '16px' ||
+      initialLyrics.nextFontSize !== '13px' ||
+      initialLyrics.nextOpacity !== '0.65'
+    )
+      throw new Error(`Initial taskbar lyrics are invalid: ${JSON.stringify(initialLyrics)}`)
+    await mode.evaluate(`window.electronAPI.sendPlayerCommand({ type: 'seek', value: 0.6 })`)
+    await waitFor(
+      () =>
+        mode.evaluate(
+          `document.querySelector('.taskbar-mode__lyrics strong')?.textContent === 'そう思ったベッドの中'`,
+        ),
+      'taskbar synced lyrics seek update',
+    )
+    await mode.evaluate(`window.electronAPI.sendPlayerCommand({ type: 'next' })`)
+    await waitFor(
+      () =>
+        mode.evaluate(
+          `document.querySelector('.taskbar-mode__track strong')?.textContent === 'Next Layout Track' && document.querySelector('.taskbar-mode__lyrics')?.getAttribute('data-taskbar-lyrics-source') === 'generated'`,
+        ),
+      'taskbar generated timeline lyrics',
+    )
+    await mode.evaluate(`window.electronAPI.saveLyricsSelection('${'b'.repeat(64)}', {
+      id: -901,
+      trackName: 'Next Layout Track',
+      artistName: 'Pulse Shelf Test',
+      plainLyrics: 'Plain line one\\nPlain line two',
+      instrumental: false,
+      source: 'manual-input',
+      sourceLabel: 'Manual input'
+    })`)
+    await mode.evaluate(`window.electronAPI.sendPlayerCommand({ type: 'seek', value: 0.2 })`)
+    await waitFor(
+      () => mode.evaluate(`!document.querySelector('.taskbar-mode__lyrics')`),
+      'taskbar plain lyrics hidden',
+    )
     process.stdout.write('PULSE_SHELF_TASKBAR_WINDOW_OK\n')
     process.stdout.write(
       initial.state.registeredShortcutCount === 1
