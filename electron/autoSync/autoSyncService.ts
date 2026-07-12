@@ -19,9 +19,16 @@ import type {
   AutoSyncJob,
   AutoSyncResult,
   AutoSyncStage,
+  GeneratedLyricsTimeline,
   LyricsSyncProfile,
 } from '../../src/types/models'
 import { validateLyricsSyncProfile } from '../../src/utils/lyricsSync'
+import {
+  GENERATED_TIMELINE_MIN_CONFIDENCE,
+  generatedLyricsLineHash,
+  generatedLyricsTextHash,
+  splitGeneratedLyricsText,
+} from '../../src/utils/generatedLyricsTimeline'
 import {
   AutoSyncError,
   autoSyncErrorMessage,
@@ -74,6 +81,7 @@ export interface AutoSyncServiceOptions {
 interface PreparedTrack extends AutoSyncTrackSource {
   lines: string[]
   syncedLyrics: string
+  timelineMode: 'timed' | 'generated'
   actualFileSize: number
   actualModifiedAt: number
 }
@@ -127,17 +135,36 @@ function cloneJob(job: AutoSyncJob): AutoSyncJob {
 }
 
 function lyricsLines(value: string | undefined): string[] {
-  if (!value) return []
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.replace(LRC_TIMESTAMP, '').trim())
-    .filter(Boolean)
+  return splitGeneratedLyricsText(value ?? '')
 }
 
 function hasOriginalTimestamps(value: string | undefined): value is string {
   if (!value) return false
   const matches = value.match(LRC_TIMESTAMP)
   return Boolean(matches?.length)
+}
+
+function syntheticSyncedLyrics(
+  lines: string[],
+  durationSeconds: number | undefined,
+): string {
+  const durationMs =
+    durationSeconds && Number.isFinite(durationSeconds) && durationSeconds > 0
+      ? Math.round(durationSeconds * 1_000)
+      : (lines.length + 1) * 6_000
+  const startMs = Math.min(30_000, Math.round(durationMs * 0.08))
+  const endMs = Math.max(startMs, Math.round(durationMs * 0.92))
+  return lines
+    .map((line, index) => {
+      const timeMs = Math.round(
+        startMs + ((endMs - startMs) * index) / Math.max(1, lines.length - 1),
+      )
+      const minutes = Math.floor(timeMs / 60_000)
+      const seconds = Math.floor((timeMs % 60_000) / 1_000)
+      const milliseconds = timeMs % 1_000
+      return `[${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(milliseconds).padStart(3, '0')}]${line}`
+    })
+    .join('\n')
 }
 
 function reasonFor(missingRequirements: string[]): string | undefined {
@@ -678,17 +705,24 @@ export class AutoSyncService {
     }
     if (!fileStats.isFile())
       return { track: null, missingRequirements: ['audio'] }
-    const syncedLyrics = source.syncedLyrics
-    const lines = lyricsLines(source.plainLyrics || syncedLyrics)
+    const originalSyncedLyrics = source.syncedLyrics
+    const lines = lyricsLines(source.plainLyrics || originalSyncedLyrics)
     const missing: string[] = []
     if (lines.length < 2) missing.push('plain-lyrics')
-    if (!hasOriginalTimestamps(syncedLyrics)) missing.push('synced-lyrics')
     if (missing.length) return { track: null, missingRequirements: missing }
+    const timelineMode = hasOriginalTimestamps(originalSyncedLyrics)
+      ? 'timed'
+      : 'generated'
+    const syncedLyrics =
+      timelineMode === 'timed'
+        ? originalSyncedLyrics!
+        : syntheticSyncedLyrics(lines, source.duration)
     return {
       track: {
         ...source,
         lines,
-        syncedLyrics: syncedLyrics!,
+        syncedLyrics,
+        timelineMode,
         actualFileSize: fileStats.size,
         actualModifiedAt: fileStats.mtimeMs,
       },
@@ -707,6 +741,8 @@ export class AutoSyncService {
       .update(track.lines.join('\n'))
       .update('\0')
       .update(track.syncedLyrics)
+      .update('\0')
+      .update(track.timelineMode)
       .update('\0')
       .update(`${this.modelFingerprint}:0.66:ja`)
       .digest('hex')
@@ -1033,17 +1069,40 @@ export class AutoSyncService {
     )
       throw new AutoSyncError('profile-invalid')
 
+    let previousGeneratedAudioTimeMs = -1
+    const safeGeneratedAnchors =
+      track.timelineMode === 'generated'
+        ? [...output.anchors]
+            .sort((left, right) => left.lineIndex - right.lineIndex)
+            .filter((anchor) => {
+              if (
+                anchor.confidence < GENERATED_TIMELINE_MIN_CONFIDENCE ||
+                anchor.audioTimeMs <= previousGeneratedAudioTimeMs
+              )
+                return false
+              previousGeneratedAudioTimeMs = anchor.audioTimeMs
+              return true
+            })
+        : []
     let validated: LyricsSyncProfile
     try {
-      validated = validateLyricsSyncProfile(output.lyricsSyncProfile)
+      validated = validateLyricsSyncProfile(
+        track.timelineMode === 'generated'
+          ? {
+              ...output.lyricsSyncProfile,
+              anchors: safeGeneratedAnchors.map(
+                ({ lyricTimeMs, audioTimeMs }) => ({
+                  lyricTimeMs,
+                  audioTimeMs,
+                }),
+              ),
+            }
+          : output.lyricsSyncProfile,
+      )
     } catch (error) {
       throw new AutoSyncError('profile-invalid', undefined, { cause: error })
     }
     const matchRate = output.matchedLines / output.totalLines
-    const canApply =
-      output.matchedLines >= 3 &&
-      matchRate >= 0.4 &&
-      validated.anchors.length >= 3
     const processingTimeMs = Math.round(output.metrics.totalSeconds * 1_000)
     const profile: LyricsSyncProfile = {
       ...validated,
@@ -1056,6 +1115,27 @@ export class AutoSyncService {
         processingTimeMs,
       },
     }
+    let generatedLyricsTimeline: GeneratedLyricsTimeline | undefined
+    if (track.timelineMode === 'generated') {
+      generatedLyricsTimeline = {
+        trackId: track.trackId,
+        source: 'ai',
+        lines: safeGeneratedAnchors.map((anchor) => ({
+          lineIndex: anchor.lineIndex,
+          textHash: generatedLyricsLineHash(track.lines[anchor.lineIndex]),
+          audioTimeMs: anchor.audioTimeMs,
+          confidence: anchor.confidence,
+        })),
+        lineCount: track.lines.length,
+        lyricsTextHash: generatedLyricsTextHash(track.lines.join('\n')),
+        model: `${output.model.separator} · ${output.model.whisper}`,
+        createdAt: Date.now(),
+      }
+    }
+    const applicableLineCount =
+      generatedLyricsTimeline?.lines.length ?? validated.anchors.length
+    const applicableMatchRate = applicableLineCount / output.totalLines
+    const canApply = applicableLineCount >= 3 && applicableMatchRate >= 0.4
     const outliers = output.diagnostics?.temporalOutlierLines ?? []
     if (
       new Set(outliers).size !== outliers.length ||
@@ -1070,6 +1150,7 @@ export class AutoSyncService {
       matchRate,
       confidence: output.confidence,
       lyricsSyncProfile: profile,
+      generatedLyricsTimeline,
       unmatchedLines: output.unmatchedLines,
       temporalOutlierLines: outliers,
       lowConfidenceLines: output.anchors

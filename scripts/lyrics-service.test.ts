@@ -5,7 +5,16 @@ import {
   LyricsService,
   normalizeLyricsTitle,
 } from '../electron/lyricsService'
-import { adjustLyricTimeMs, validateLyricsSyncProfile } from '../src/utils/lyricsSync'
+import {
+  adjustLyricTimeMs,
+  validateLyricsSyncProfile,
+} from '../src/utils/lyricsSync'
+import {
+  generatedLyricsLineHash,
+  generatedLyricsTextHash,
+  splitGeneratedLyricsText,
+  validateGeneratedLyricsTimeline,
+} from '../src/utils/generatedLyricsTimeline'
 
 const track = (overrides: Partial<Track> = {}): Track => ({
   id: 'a'.repeat(64),
@@ -23,7 +32,9 @@ const track = (overrides: Partial<Track> = {}): Track => ({
   ...overrides,
 })
 
-const candidate = (overrides: Partial<LyricsCandidate> = {}): LyricsCandidate => ({
+const candidate = (
+  overrides: Partial<LyricsCandidate> = {},
+): LyricsCandidate => ({
   id: 1,
   trackName: 'Test Song',
   artistName: 'Test Artist',
@@ -41,7 +52,8 @@ async function withFetch(
   const original = globalThis.fetch
   globalThis.fetch = (async () => {
     if (response instanceof Error) throw response
-    if (typeof response === 'number') return new Response('', { status: response })
+    if (typeof response === 'number')
+      return new Response('', { status: response })
     return new Response(JSON.stringify(response), { status: 200 })
   }) as typeof fetch
   try {
@@ -110,7 +122,10 @@ assert.deepEqual(extractCoverHints('夜に駆ける / YOASOBI covered by A'), {
   title: '夜に駆ける',
   originalArtist: 'YOASOBI',
 })
-assert.equal(extractCoverHints('Original Song - 歌ってみた').title, 'Original Song')
+assert.equal(
+  extractCoverHints('Original Song - 歌ってみた').title,
+  'Original Song',
+)
 
 await withFetch([candidate()], async () => {
   const result = await new LyricsService().lookup(track())
@@ -134,7 +149,10 @@ await withProviderFetch(
     assert.equal(calls.lyrica, 1)
     assert.equal(result.candidates[0]?.provider, 'lyrica')
     assert.equal(result.candidates[0]?.sourceLabel, 'Lyrica · YouTube Music')
-    assert.match(result.candidates[0]?.syncedLyrics ?? '', /\[00:01\.250\]Second line/)
+    assert.match(
+      result.candidates[0]?.syncedLyrics ?? '',
+      /\[00:01\.250\]Second line/,
+    )
     assert.equal(result.autoMatch, undefined)
   },
 )
@@ -183,13 +201,10 @@ await withProviderFetch(
   },
 )
 
-await withProviderFetch(
-  { lrclib: [], lyricaStatus: 500 },
-  async () => {
-    const result = await new LyricsService().lookup(track())
-    assert.equal(result.candidates.length, 0)
-  },
-)
+await withProviderFetch({ lrclib: [], lyricaStatus: 500 }, async () => {
+  const result = await new LyricsService().lookup(track())
+  assert.equal(result.candidates.length, 0)
+})
 
 await withProviderFetch(
   { lrclib: [], lyricaSynced: lyricaPayload() },
@@ -214,7 +229,13 @@ await withProviderFetch(
 )
 
 await withFetch(
-  [candidate({ trackName: '夜に駆ける', artistName: 'YOASOBI', albumName: '' })],
+  [
+    candidate({
+      trackName: '夜に駆ける',
+      artistName: 'YOASOBI',
+      albumName: '',
+    }),
+  ],
   async () => {
     const result = await new LyricsService().lookup(
       track({
@@ -224,29 +245,47 @@ await withFetch(
       }),
     )
     assert.equal(result.originalArtist, 'YOASOBI')
-    assert.equal(result.status, 'low-confidence', 'Japanese cover must stay manual')
+    assert.equal(
+      result.status,
+      'low-confidence',
+      'Japanese cover must stay manual',
+    )
     assert.equal(result.candidates[0]?.trackName, '夜に駆ける')
   },
 )
 
-await withFetch([candidate({ trackName: 'Song', artistName: 'Singer' })], async () => {
-  const result = await new LyricsService().lookup(
-    track({ title: 'Song - cover', artist: 'Cover Artist', album: '' }),
-  )
-  assert.equal(result.status, 'low-confidence', 'cover must stay manual')
-  assert.equal(result.candidates.length, 1)
-})
+await withFetch(
+  [candidate({ trackName: 'Song', artistName: 'Singer' })],
+  async () => {
+    const result = await new LyricsService().lookup(
+      track({ title: 'Song - cover', artist: 'Cover Artist', album: '' }),
+    )
+    assert.equal(result.status, 'low-confidence', 'cover must stay manual')
+    assert.equal(result.candidates.length, 1)
+  },
+)
 
-await withFetch([candidate({ trackName: 'Smile', artistName: 'Artist' })], async () => {
-  const result = await new LyricsService().lookup(
-    track({ title: '✨ Smile (Official Music Video)', artist: 'Artist', album: '' }),
-  )
-  assert.equal(result.autoMatch?.trackName, 'Smile')
-})
+await withFetch(
+  [candidate({ trackName: 'Smile', artistName: 'Artist' })],
+  async () => {
+    const result = await new LyricsService().lookup(
+      track({
+        title: '✨ Smile (Official Music Video)',
+        artist: 'Artist',
+        album: '',
+      }),
+    )
+    assert.equal(result.autoMatch?.trackName, 'Smile')
+  },
+)
 
 await withFetch([candidate()], async () => {
   const result = await new LyricsService().lookup(track({ duration: 3600 }))
-  assert.equal(result.status, 'low-confidence', 'long duration mismatch must stay manual')
+  assert.equal(
+    result.status,
+    'low-confidence',
+    'long duration mismatch must stay manual',
+  )
   assert.equal(result.autoMatch, undefined)
   assert.equal(result.candidates.length, 1)
 })
@@ -270,12 +309,16 @@ await withFetch([candidate(), candidate({ id: 2 })], async () => {
 })
 
 await withFetch(429, async () => {
-  const result = await new LyricsService().lookup(track({ title: 'Rate Limit Test' }))
+  const result = await new LyricsService().lookup(
+    track({ title: 'Rate Limit Test' }),
+  )
   assert.equal(result.status, 'rate-limited')
 })
 
 await withFetch(new Error('offline'), async () => {
-  const result = await new LyricsService().lookup(track({ title: 'Offline Test' }))
+  const result = await new LyricsService().lookup(
+    track({ title: 'Offline Test' }),
+  )
   assert.equal(result.status, 'network-error')
 })
 
@@ -286,7 +329,10 @@ await withFetch([], async () => {
   assert.equal(result.status, 'not-found')
 })
 
-const syncProfile = (anchors: Array<{ lyricTimeMs: number; audioTimeMs: number }>, offsetMs = 0) => ({
+const syncProfile = (
+  anchors: Array<{ lyricTimeMs: number; audioTimeMs: number }>,
+  offsetMs = 0,
+) => ({
   trackId: 'a'.repeat(64),
   offsetMs,
   anchors,
@@ -295,7 +341,10 @@ const syncProfile = (anchors: Array<{ lyricTimeMs: number; audioTimeMs: number }
 
 assert.equal(adjustLyricTimeMs(10_000, syncProfile([], 3_000)), 13_000)
 assert.equal(
-  adjustLyricTimeMs(10_000, syncProfile([{ lyricTimeMs: 5_000, audioTimeMs: 8_000 }])),
+  adjustLyricTimeMs(
+    10_000,
+    syncProfile([{ lyricTimeMs: 5_000, audioTimeMs: 8_000 }]),
+  ),
   13_000,
 )
 assert.equal(
@@ -330,6 +379,62 @@ assert.throws(() =>
     ]),
   ),
 )
+
+const generatedLyrics = '첫 줄\n둘째 줄\n셋째 줄'
+assert.deepEqual(
+  splitGeneratedLyricsText(
+    '첫 줄\n[00:02.50] 둘째 줄\n[00:05.00] 셋째 줄\n[00:08.00]',
+  ),
+  ['첫 줄', '둘째 줄', '셋째 줄'],
+)
+const generatedTimeline = {
+  trackId: 'a'.repeat(64),
+  source: 'ai' as const,
+  lineCount: 3,
+  lyricsTextHash: generatedLyricsTextHash(generatedLyrics),
+  lines: ['첫 줄', '둘째 줄', '셋째 줄'].map((text, lineIndex) => ({
+    lineIndex,
+    textHash: generatedLyricsLineHash(text),
+    audioTimeMs: 1_000 + lineIndex * 2_000,
+    confidence: 0.9,
+  })),
+  model: 'test-model',
+  createdAt: 1,
+}
+assert.doesNotThrow(() =>
+  validateGeneratedLyricsTimeline(generatedTimeline, generatedLyrics),
+)
+assert.throws(() =>
+  validateGeneratedLyricsTimeline(generatedTimeline, '첫 줄\n바뀐 줄\n셋째 줄'),
+)
+assert.throws(() =>
+  validateGeneratedLyricsTimeline(
+    generatedTimeline,
+    `${generatedLyrics}\n넷째 줄`,
+  ),
+)
+assert.throws(() =>
+  validateGeneratedLyricsTimeline(
+    {
+      ...generatedTimeline,
+      lines: generatedTimeline.lines.map((line, index) =>
+        index === 1 ? { ...line, confidence: 0.7 } : line,
+      ),
+    },
+    generatedLyrics,
+  ),
+)
+assert.throws(() =>
+  validateGeneratedLyricsTimeline(
+    {
+      ...generatedTimeline,
+      lines: generatedTimeline.lines.map((line, index) =>
+        index === 1 ? { ...line, audioTimeMs: 500 } : line,
+      ),
+    },
+    generatedLyrics,
+  ),
+)
 assert.throws(() =>
   validateLyricsSyncProfile(
     syncProfile([
@@ -340,6 +445,8 @@ assert.throws(() =>
 )
 
 await withFetch([], async () => {
-  const result = await new LyricsService().lookup(track({ title: '', artist: '' }))
+  const result = await new LyricsService().lookup(
+    track({ title: '', artist: '' }),
+  )
   assert.equal(result.status, 'metadata-missing')
 })

@@ -19,11 +19,12 @@ const workspaceRoot = argument('--workspace')
 const input = JSON.parse(await readFile(inputPath, 'utf8'))
 const mode = input.trackId[0]
 
-await appendFile(
-  path.join(workspaceRoot, 'mock-worker-count.txt'),
-  `${input.trackId}\n`,
-  'utf8',
-)
+if (process.env.PULSE_SHELF_AUTO_SYNC_MOCK_NO_COUNT !== '1')
+  await appendFile(
+    path.join(workspaceRoot, 'mock-worker-count.txt'),
+    `${input.trackId}\n`,
+    'utf8',
+  )
 
 process.stdout.write('mock worker: ordinary log line\n')
 process.stdout.write('{malformed-json\n')
@@ -71,7 +72,8 @@ if (mode === 'e') {
   const anchors = Array.from({ length: matchedLines }, (_, lineIndex) => ({
     lineIndex,
     lyricTimeMs: lineIndex * 10_000,
-    audioTimeMs: lineIndex * 10_000 + 750,
+    audioTimeMs:
+      mode === '2' && lineIndex === 2 ? 500 : lineIndex * 10_000 + 750,
     confidence: lineIndex === 1 ? 0.7 : 0.92,
     whisperText: `mock line ${lineIndex + 1}`,
   }))

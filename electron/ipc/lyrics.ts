@@ -6,10 +6,13 @@ import type {
   LyricsSearchQuery,
   LyricsSearchResult,
   LyricsSyncProfile,
+  GeneratedLyricsTimeline,
+  GeneratedLyricsTimelineState,
 } from '../../src/types/models'
 import { getStoredData, setStoredData } from '../data'
 import { LyricsService } from '../lyricsService'
 import { validateLyricsSyncProfile } from '../../src/utils/lyricsSync'
+import { validateGeneratedLyricsTimeline } from '../../src/utils/generatedLyricsTimeline'
 
 const MAX_LYRICS_BYTES = 2 * 1024 * 1024
 const lyricsService = new LyricsService()
@@ -132,6 +135,7 @@ export function removeTrackLyrics(trackId: string) {
   const data = getStoredData()
   delete data.lyrics[trackId]
   delete data.lyricsSyncProfiles[trackId]
+  delete data.generatedLyricsTimelines[trackId]
   setStoredData(data)
 }
 
@@ -146,6 +150,7 @@ export function markTrackInstrumental(trackId: string) {
     userSelected: true,
   }
   delete data.lyricsSyncProfiles[trackId]
+  delete data.generatedLyricsTimelines[trackId]
   setStoredData(data)
 }
 
@@ -188,6 +193,7 @@ export async function reloadTrackLyrics(
   const data = getStoredData()
   delete data.lyrics[trackId]
   delete data.lyricsSyncProfiles[trackId]
+  delete data.generatedLyricsTimelines[trackId]
   setStoredData(data)
   return loadTrackLyrics(trackId)
 }
@@ -209,5 +215,42 @@ export function saveLyricsSyncProfile(profile: LyricsSyncProfile) {
 export function clearLyricsSyncProfile(trackId: string) {
   const data = getStoredData()
   delete data.lyricsSyncProfiles[trackId]
+  setStoredData(data)
+}
+
+export async function getGeneratedLyricsTimelineState(
+  trackId: string,
+): Promise<GeneratedLyricsTimelineState> {
+  const timeline = getStoredData().generatedLyricsTimelines[trackId] ?? null
+  if (!timeline) return { timeline: null, valid: false }
+  const lyrics = await loadTrackLyrics(trackId)
+  if (lyrics.kind !== 'text')
+    return { timeline, valid: false, reason: 'lyrics-missing' }
+  try {
+    validateGeneratedLyricsTimeline(timeline, lyrics.content)
+    return { timeline, valid: true }
+  } catch {
+    return { timeline, valid: false, reason: 'text-changed' }
+  }
+}
+
+export async function saveGeneratedLyricsTimeline(
+  timeline: GeneratedLyricsTimeline,
+) {
+  const lyrics = await loadTrackLyrics(timeline.trackId)
+  if (lyrics.kind !== 'text')
+    throw new Error('일반 가사가 없어 AI 타임라인을 저장할 수 없습니다.')
+  const validated = validateGeneratedLyricsTimeline(timeline, lyrics.content)
+  const data = getStoredData()
+  if (!data.tracks.some((track) => track.id === validated.trackId))
+    throw new Error('Track not found')
+  data.generatedLyricsTimelines[validated.trackId] = validated
+  setStoredData(data)
+  return validated
+}
+
+export function clearGeneratedLyricsTimeline(trackId: string) {
+  const data = getStoredData()
+  delete data.generatedLyricsTimelines[trackId]
   setStoredData(data)
 }

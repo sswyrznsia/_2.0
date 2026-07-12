@@ -67,6 +67,9 @@ import {
   getLyricsSyncProfile,
   saveLyricsSyncProfile,
   clearLyricsSyncProfile,
+  getGeneratedLyricsTimelineState,
+  saveGeneratedLyricsTimeline,
+  clearGeneratedLyricsTimeline,
   saveLyricsSelection,
   searchTrackLyrics,
 } from './ipc/lyrics'
@@ -279,6 +282,7 @@ async function resolveAutoSyncTrack(trackId: string) {
     audioPath: track.filePath,
     fileSize: track.fileSize,
     modifiedAt: track.modifiedAt,
+    duration: track.duration,
     plainLyrics,
     syncedLyrics,
     provider: selected?.provider ?? selected?.source,
@@ -1458,6 +1462,48 @@ function registerIpc() {
     assertTrustedSender(event)
     clearLyricsSyncProfile(trackIdSchema.parse(trackId))
   })
+  const generatedLyricsTimelineSchema = z.object({
+    trackId: trackIdSchema,
+    source: z.enum(['ai', 'manual']),
+    lines: z
+      .array(
+        z.object({
+          lineIndex: z.number().int().nonnegative(),
+          textHash: z.string().regex(/^[a-f0-9]{16}$/),
+          audioTimeMs: z.number().int().nonnegative(),
+          confidence: z.number().finite().min(0).max(1).optional(),
+        }),
+      )
+      .max(20_000),
+    lineCount: z.number().int().positive().max(20_000),
+    lyricsTextHash: z.string().regex(/^[a-f0-9]{16}$/),
+    model: z.string().trim().min(1).max(500).optional(),
+    createdAt: z.number().finite().nonnegative(),
+  })
+  ipcMain.handle(IPC.generatedLyricsTimelineGet, (event, trackId: unknown) => {
+    assertTrustedSender(event)
+    return getGeneratedLyricsTimelineState(trackIdSchema.parse(trackId))
+  })
+  ipcMain.handle(
+    IPC.generatedLyricsTimelineSave,
+    async (event, timeline: unknown) => {
+      assertTrustedSender(event)
+      const parsed = generatedLyricsTimelineSchema.parse(timeline)
+      if (
+        parsed.source === 'ai' &&
+        autoSyncService?.getJob(parsed.trackId)?.status === 'completed'
+      )
+        await autoSyncService.assertResultCurrent(parsed.trackId)
+      return saveGeneratedLyricsTimeline(parsed)
+    },
+  )
+  ipcMain.handle(
+    IPC.generatedLyricsTimelineClear,
+    (event, trackId: unknown) => {
+      assertTrustedSender(event)
+      clearGeneratedLyricsTimeline(trackIdSchema.parse(trackId))
+    },
+  )
   ipcMain.handle(IPC.revealTrack, (event, trackId: unknown) => {
     assertMainSender(event)
     const id = trackIdSchema.parse(trackId)

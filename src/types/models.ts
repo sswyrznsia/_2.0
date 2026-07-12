@@ -129,6 +129,29 @@ export interface LyricsSyncProfile {
   }
 }
 
+export interface GeneratedLyricsLineTiming {
+  lineIndex: number
+  textHash: string
+  audioTimeMs: number
+  confidence?: number
+}
+
+export interface GeneratedLyricsTimeline {
+  trackId: string
+  source: 'ai' | 'manual'
+  lines: GeneratedLyricsLineTiming[]
+  lineCount: number
+  lyricsTextHash: string
+  model?: string
+  createdAt: number
+}
+
+export interface GeneratedLyricsTimelineState {
+  timeline: GeneratedLyricsTimeline | null
+  valid: boolean
+  reason?: 'lyrics-missing' | 'text-changed' | 'timeline-invalid'
+}
+
 export type AutoSyncStage =
   | 'preparing'
   | 'separating'
@@ -186,6 +209,7 @@ export interface AutoSyncResult {
   matchRate: number
   confidence: number
   lyricsSyncProfile: LyricsSyncProfile
+  generatedLyricsTimeline?: GeneratedLyricsTimeline
   unmatchedLines: number[]
   temporalOutlierLines: number[]
   lowConfidenceLines: AutoSyncLineConfidence[]
@@ -298,6 +322,7 @@ export interface AppData {
   recentTrackIds: string[]
   lyrics: Record<string, TrackLyrics>
   lyricsSyncProfiles: Record<string, LyricsSyncProfile>
+  generatedLyricsTimelines: Record<string, GeneratedLyricsTimeline>
   settings: Settings
   lastPage: PageId
   playerSession: PlayerSession

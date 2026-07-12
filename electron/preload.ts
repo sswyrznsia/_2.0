@@ -53,6 +53,12 @@ const api: ElectronApi = {
     ipcRenderer.invoke(IPC.lyricsSyncSave, profile),
   clearLyricsSyncProfile: (trackId) =>
     ipcRenderer.invoke(IPC.lyricsSyncClear, trackId),
+  getGeneratedLyricsTimeline: (trackId) =>
+    ipcRenderer.invoke(IPC.generatedLyricsTimelineGet, trackId),
+  saveGeneratedLyricsTimeline: (timeline) =>
+    ipcRenderer.invoke(IPC.generatedLyricsTimelineSave, timeline),
+  clearGeneratedLyricsTimeline: (trackId) =>
+    ipcRenderer.invoke(IPC.generatedLyricsTimelineClear, trackId),
   getLyricsAutoSyncAvailability: (trackId) =>
     ipcRenderer.invoke(IPC.lyricsAutoSyncGetAvailability, trackId),
   startLyricsAutoSync: (trackId) =>

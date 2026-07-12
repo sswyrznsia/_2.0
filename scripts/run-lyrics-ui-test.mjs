@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import electron from 'electron'
@@ -17,9 +17,16 @@ const userData = path.join(harnessRoot, 'user-data')
 const trackAId = 'b'.repeat(64)
 const trackBId = 'c'.repeat(64)
 const trackCId = 'd'.repeat(64)
-const trackDId = 'e'.repeat(64)
+const trackDId = '3'.repeat(64)
+const autoSyncWorker = path.join(
+  root,
+  'scripts',
+  'fixtures',
+  'mock-auto-sync-worker.mjs',
+)
 const trackAPath = path.join(harnessRoot, 'track-a.wav')
 const trackBPath = path.join(harnessRoot, 'track-b.wav')
+const trackDPath = path.join(harnessRoot, 'track-d.wav')
 const coverPath = (trackId) => path.join(userData, 'covers', `${trackId}.png`)
 const searchScreenshot = path.join(
   root,
@@ -49,8 +56,8 @@ let trackARequests = 0
 let lyricaRequests = 0
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-function silentWav() {
-  const samples = 44_100
+function silentWav(seconds = 1) {
+  const samples = 44_100 * seconds
   const buffer = Buffer.alloc(44 + samples * 2)
   buffer.write('RIFF', 0)
   buffer.writeUInt32LE(36 + samples * 2, 4)
@@ -159,13 +166,31 @@ class Cdp {
       returnByValue: true,
       awaitPromise: true,
     })
-    if (result.exceptionDetails) throw new Error(result.exceptionDetails.text)
+    if (result.exceptionDetails)
+      throw new Error(
+        result.exceptionDetails.exception?.description ??
+          result.exceptionDetails.text,
+      )
     return result.result.value
   }
 
   close() {
     this.ws.terminate()
   }
+}
+
+async function clickCoverByTitle(cdp, title) {
+  await waitFor(
+    () =>
+      cdp.evaluate(`(() => {
+        const item = [...document.querySelectorAll('.cover-item')]
+          .find((candidate) => candidate.querySelector('strong')?.textContent.includes(${JSON.stringify(title)}))
+        if (!item) return false
+        item.click()
+        return true
+      })()`),
+    `${title} cover`,
+  )
 }
 
 function fixture() {
@@ -236,7 +261,7 @@ function fixture() {
           addedAt: now,
           liked: false,
           playCount: 0,
-          filePath: trackBPath,
+          filePath: trackDPath,
         },
       ],
       playlists: [],
@@ -299,7 +324,8 @@ const candidates = [
   candidate,
   {
     id: 78,
-    trackName: '君の知らない物語と非常に長い日本語の楽曲タイトルを表示するためのテスト',
+    trackName:
+      '君の知らない物語と非常に長い日本語の楽曲タイトルを表示するためのテスト',
     artistName: 'supercell and a deliberately long featured artist name',
     albumName: 'Today Is A Beautiful Day · Long Album Edition With Extra Notes',
     duration: 339,
@@ -309,9 +335,11 @@ const candidates = [
   },
   {
     id: 79,
-    trackName: 'A candidate with a very long English title that must stay contained',
+    trackName:
+      'A candidate with a very long English title that must stay contained',
     artistName: 'Long Artist',
-    albumName: 'A very long album name that should wrap inside the candidate content column',
+    albumName:
+      'A very long album name that should wrap inside the candidate content column',
     duration: 242,
     plainLyrics: 'Plain lyrics',
     instrumental: false,
@@ -358,8 +386,18 @@ const server = createServer((request, response) => {
             title: 'Slow Track',
             lyrics: 'Lyrica first line\nLyrica second line',
             timed_lyrics: [
-              { text: 'Lyrica first line', start_time: 0, end_time: 500, id: 1 },
-              { text: 'Lyrica second line', start_time: 500, end_time: 900, id: 2 },
+              {
+                text: 'Lyrica first line',
+                start_time: 0,
+                end_time: 500,
+                id: 1,
+              },
+              {
+                text: 'Lyrica second line',
+                start_time: 500,
+                end_time: 900,
+                id: 2,
+              },
             ],
             metadata: { album: 'Test Album', duration: 200 },
           },
@@ -416,6 +454,7 @@ try {
   await mkdir(path.dirname(coverPath(trackAId)), { recursive: true })
   await writeFile(trackAPath, silentWav())
   await writeFile(trackBPath, silentWav())
+  await writeFile(trackDPath, silentWav(45))
   await sharp({
     create: {
       width: 180,
@@ -450,6 +489,7 @@ try {
     path.join(userData, 'pulse-shelf-data.json'),
     JSON.stringify(fixture()),
   )
+  const viteStartedAt = Date.now()
   vite = start(
     'cmd.exe',
     ['/d', '/s', '/c', 'npm run electron:dev -- --host 127.0.0.1'],
@@ -459,6 +499,17 @@ try {
     async () => (await fetch('http://127.0.0.1:5173/')).ok,
     'Vite server',
   )
+  await waitFor(async () => {
+    const mainBundle = path.join(root, 'dist-electron', 'main.js')
+    const [bundleStats, content] = await Promise.all([
+      stat(mainBundle),
+      readFile(mainBundle, 'utf8'),
+    ])
+    return (
+      bundleStats.mtimeMs >= viteStartedAt &&
+      content.includes('generated-lyrics-timeline:get')
+    )
+  }, 'current Electron main bundle')
   app = start(
     electron,
     [
@@ -473,6 +524,9 @@ try {
       PULSE_SHELF_TEST_USER_DATA: userData,
       PULSE_SHELF_LRCLIB_API: `http://127.0.0.1:${address.port}/api`,
       PULSE_SHELF_LYRICA_API: `http://127.0.0.1:${address.port}`,
+      PULSE_SHELF_AUTO_SYNC_TEST_COMMAND: process.execPath,
+      PULSE_SHELF_AUTO_SYNC_TEST_SCRIPT: autoSyncWorker,
+      PULSE_SHELF_AUTO_SYNC_MOCK_NO_COUNT: '1',
     },
   )
   const page = await waitFor(async () => {
@@ -541,10 +595,8 @@ try {
   })
   await writeFile(coverScreenshot, Buffer.from(coverCapture.data, 'base64'))
 
-  const selectCover = async (index, title, expectedShape) => {
-    await cdp.evaluate(
-      `document.querySelectorAll('.cover-item')[${index}].click()`,
-    )
+  const selectCover = async (title, expectedShape) => {
+    await clickCoverByTitle(cdp, title)
     await waitFor(
       () =>
         cdp.evaluate(
@@ -591,7 +643,7 @@ try {
         `Square cover did not retain its natural aspect ratio: ${JSON.stringify(state)}`,
       )
   }
-  await selectCover(1, 'Slow Track', 'wide')
+  await selectCover('Slow Track', 'wide')
   const horizontalCapture = await cdp.send('Page.captureScreenshot', {
     format: 'png',
   })
@@ -599,9 +651,9 @@ try {
     horizontalCoverScreenshot,
     Buffer.from(horizontalCapture.data, 'base64'),
   )
-  await selectCover(2, 'Square Track', 'square')
-  await selectCover(3, 'No Cover Track', 'empty')
-  await selectCover(0, 'Candidate Song', 'tall')
+  await selectCover('Square Track', 'square')
+  await selectCover('No Cover Track', 'empty')
+  await selectCover('Candidate Song', 'tall')
   await cdp.evaluate(
     'window.dispatchEvent(new CustomEvent("pulse:panel-tab", { detail: "lyrics" }))',
   )
@@ -663,7 +715,10 @@ try {
       layout.rows.length !== 5 ||
       layout.rows.some(
         (row) =>
-          !row.fits || !row.actionVisible || row.actionWidth < 58 || row.contentWidth < 1,
+          !row.fits ||
+          !row.actionVisible ||
+          row.actionWidth < 58 ||
+          row.contentWidth < 1,
       )
     )
       throw new Error(
@@ -695,7 +750,8 @@ try {
   )
   await cdp.evaluate('document.querySelector(".lyrics-sync-trigger").click()')
   await waitFor(
-    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-sync-editor"))'),
+    () =>
+      cdp.evaluate('Boolean(document.querySelector(".lyrics-sync-editor"))'),
     'lyrics sync editor',
   )
   const syncControls = await cdp.evaluate(`(() => ({
@@ -704,7 +760,9 @@ try {
       .filter((button) => button.textContent.includes('ms')).length,
   }))()`)
   if (syncControls.offsetButtons !== 4)
-    throw new Error(`Lyrics sync offset controls are incomplete: ${JSON.stringify(syncControls)}`)
+    throw new Error(
+      `Lyrics sync offset controls are incomplete: ${JSON.stringify(syncControls)}`,
+    )
   await cdp.evaluate(`
     [...document.querySelectorAll('.lyrics-sync-editor button')]
       .find((button) => button.textContent.includes('+100ms')).click()
@@ -723,7 +781,9 @@ try {
     `window.electronAPI.getLyricsSyncProfile('${trackAId}')`,
   )
   if (savedOffset?.offsetMs !== 100)
-    throw new Error(`Lyrics sync offset was not saved: ${JSON.stringify(savedOffset)}`)
+    throw new Error(
+      `Lyrics sync offset was not saved: ${JSON.stringify(savedOffset)}`,
+    )
   await cdp.evaluate('document.querySelector(".lyrics-sync-trigger").click()')
   await cdp.evaluate(`
     [...document.querySelectorAll('.lyrics-sync-editor button')]
@@ -737,7 +797,9 @@ try {
     `window.electronAPI.getLyricsSyncProfile('${trackAId}')`,
   )
   if (cancelledOffset?.offsetMs !== 100)
-    throw new Error('Cancelling lyrics sync editing did not restore the saved profile')
+    throw new Error(
+      'Cancelling lyrics sync editing did not restore the saved profile',
+    )
   await cdp.evaluate(`window.electronAPI.saveLyricsSyncProfile({
     trackId: '${trackAId}', offsetMs: 0, updatedAt: Date.now(), anchors: [
       { lyricTimeMs: 0, audioTimeMs: 5000 },
@@ -759,7 +821,9 @@ try {
     () => cdp.evaluate('Boolean(document.querySelector(".lyrics-candidate"))'),
     'candidate selection after sync profile',
   )
-  await cdp.evaluate('document.querySelector(".lyrics-candidate .button").click()')
+  await cdp.evaluate(
+    'document.querySelector(".lyrics-candidate .button").click()',
+  )
   await waitFor(
     () => cdp.evaluate('Boolean(document.querySelector(".lyrics-synced"))'),
     'synced lyrics after replacing candidate',
@@ -789,11 +853,7 @@ try {
     provider: 'lrclib',
     sourceLabel: 'LRCLIB',
   })`)
-  await cdp.evaluate(`
-    [...document.querySelectorAll('.cover-item')]
-      .find((item) => item.querySelector('strong')?.textContent.includes('Square Track'))
-      ?.click()
-  `)
+  await clickCoverByTitle(cdp, 'Square Track')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -815,11 +875,15 @@ try {
     actions: document.querySelectorAll('.lyrics-text [data-lyrics-search-mode]').length,
     hasActiveLine: Boolean(document.querySelector('.lyrics-text .is-active')),
     warning: document.querySelector('.lyrics-sync-unavailable')?.textContent,
+    autoSyncAvailable: document.querySelector('[data-auto-sync-availability]')?.getAttribute('data-auto-sync-availability'),
+    autoSyncDisabled: document.querySelector('[data-auto-sync-trigger]')?.disabled,
   }))()`)
   if (
     plainLyricsState.actions !== 2 ||
     plainLyricsState.hasActiveLine ||
-    !plainLyricsState.warning?.includes('타임스탬프')
+    !plainLyricsState.warning?.includes('줄별 타임라인') ||
+    plainLyricsState.autoSyncAvailable !== 'available' ||
+    plainLyricsState.autoSyncDisabled
   )
     throw new Error(
       `Plain lyrics actions or timestamp warning are missing: ${JSON.stringify(plainLyricsState)}`,
@@ -844,7 +908,9 @@ try {
     throw new Error(
       `Immediate lyrics search feedback is incomplete: ${JSON.stringify(initialSearchFeedback)}`,
     )
-  await cdp.evaluate('document.querySelector("[data-lyrics-search-cancel]").click()')
+  await cdp.evaluate(
+    'document.querySelector("[data-lyrics-search-cancel]").click()',
+  )
   await waitFor(
     () =>
       cdp.evaluate(
@@ -890,19 +956,19 @@ try {
     'timed lyrics candidates after search cancellation',
   )
   await cdp.evaluate(
-    `[...document.querySelectorAll('.lyrics-candidate')]
-      .find((row) => row.querySelector('strong')?.textContent === 'Candidate Song')
+    `[...document.querySelectorAll('.lyrics-candidate[data-lyrics-synced="true"]')]
+      .find((row) => row.querySelector('strong')?.textContent.includes('Candidate Song'))
       ?.querySelector('.lyrics-candidate__action')?.click()`,
   )
   await waitFor(
-    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-synced .is-active"))'),
-    'active line after timed lyrics selection',
+    () =>
+      cdp.evaluate(
+        `window.electronAPI.loadLyrics('${trackCId}').then((lyrics) =>
+          lyrics.kind === 'lrc' && lyrics.content.includes('Candidate lyrics'))`,
+      ),
+    'timed lyrics persistence after selection',
   )
-  await cdp.evaluate(`
-    [...document.querySelectorAll('.cover-item')]
-      .find((item) => item.querySelector('strong')?.textContent.includes('Candidate Song'))
-      ?.click()
-  `)
+  await clickCoverByTitle(cdp, 'Candidate Song')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -910,11 +976,7 @@ try {
       ),
     'track switch after timed lyrics selection',
   )
-  await cdp.evaluate(`
-    [...document.querySelectorAll('.cover-item')]
-      .find((item) => item.querySelector('strong')?.textContent.includes('Square Track'))
-      ?.click()
-  `)
+  await clickCoverByTitle(cdp, 'Square Track')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -934,14 +996,128 @@ try {
     'saved timed lyrics after track switch',
   )
   await waitFor(
-    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-synced"))'),
+    () =>
+      cdp.evaluate(
+        'Boolean(document.querySelector(".lyrics-synced .is-active"))',
+      ),
     'timed lyrics UI after track switch',
   )
-  await cdp.evaluate(`
-    [...document.querySelectorAll('.cover-item')]
-      .find((item) => item.querySelector('strong')?.textContent.includes('Candidate Song'))
-      ?.click()
-  `)
+  await cdp.evaluate(`window.electronAPI.saveLyricsSelection('${trackDId}', {
+    id: 902,
+    trackName: 'Plain Timeline Track',
+    artistName: 'Plain Timeline Artist',
+    plainLyrics: '夜空を見上げた\\n名前を呼んでいた\\n静かな風が吹く\\n明日へ歩き出す\\n光を信じてる',
+    instrumental: false,
+    provider: 'lrclib',
+    sourceLabel: 'LRCLIB',
+  })`)
+  await clickCoverByTitle(cdp, 'No Cover Track')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".now-panel__track strong")?.textContent.includes("No Cover Track")',
+      ),
+    'plain timeline track',
+  )
+  await cdp.evaluate(
+    'window.dispatchEvent(new CustomEvent("pulse:panel-tab", { detail: "lyrics" }))',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector("[data-auto-sync-availability=available]") && !document.querySelector("[data-auto-sync-trigger]")?.disabled',
+      ),
+    'plain-only auto-sync availability',
+  )
+  await cdp.evaluate(
+    'document.querySelector("[data-auto-sync-trigger]").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'Boolean(document.querySelector("[data-auto-sync-confirmation]"))',
+      ),
+    'plain-only auto-sync confirmation',
+  )
+  await cdp.evaluate(
+    'document.querySelector("[data-auto-sync-confirm-start]").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'Boolean(document.querySelector("[data-auto-sync-result]"))',
+      ),
+    'plain-only auto-sync result',
+  )
+  const plainResultText = await cdp.evaluate(
+    'document.querySelector("[data-auto-sync-result]")?.innerText ?? ""',
+  )
+  if (!plainResultText.includes('3개 줄별 시간'))
+    throw new Error(
+      `Plain-only result did not exclude unsafe lines: ${plainResultText}`,
+    )
+  const beforePlainPreview = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
+  )
+  if (beforePlainPreview.timeline !== null)
+    throw new Error('Plain-only result persisted before explicit apply')
+  await cdp.evaluate(
+    'document.querySelector("[data-auto-sync-preview]").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".lyrics-generated")?.getAttribute("data-auto-sync-preview-active") === "true"',
+      ),
+    'plain-only generated timeline preview',
+  )
+  const duringPlainPreview = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
+  )
+  if (duringPlainPreview.timeline !== null)
+    throw new Error('Plain-only preview unexpectedly persisted')
+  await cdp.evaluate(
+    `document.querySelector('[data-generated-line-index="0"]').click()`,
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="0"]')?.classList.contains('is-active')`,
+      ),
+    'first generated lyric highlight',
+  )
+  await cdp.evaluate(
+    `document.querySelector('[data-generated-line-index="2"]').click()`,
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="2"]')?.classList.contains('is-active')`,
+      ),
+    'generated lyric highlight after seek',
+  )
+  await cdp.evaluate('document.querySelector("[data-auto-sync-apply]").click()')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}').then((state) => state.valid && state.timeline?.lines.length === 3)`,
+      ),
+    'plain-only generated timeline persistence',
+  )
+  await clickCoverByTitle(cdp, 'Candidate Song')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".now-panel__track strong")?.textContent.includes("Candidate Song")',
+      ),
+    'track switch away from generated timeline',
+  )
+  await clickCoverByTitle(cdp, 'No Cover Track')
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-generated"))'),
+    'generated timeline after track switch and return',
+  )
+  await clickCoverByTitle(cdp, 'Candidate Song')
 
   const savedAfterSelection = JSON.parse(
     await readFile(path.join(userData, 'pulse-shelf-data.json'), 'utf8'),
@@ -952,7 +1128,7 @@ try {
     )
   const requestsAfterSelection = trackARequests
 
-  await cdp.evaluate('document.querySelectorAll(".cover-item")[1].click()')
+  await clickCoverByTitle(cdp, 'Slow Track')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -961,7 +1137,8 @@ try {
     'track B after selecting it',
   )
   await waitFor(
-    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-search-panel"))'),
+    () =>
+      cdp.evaluate('Boolean(document.querySelector(".lyrics-search-panel"))'),
     'Lyrica fallback search panel',
   )
   await cdp.evaluate(
@@ -976,7 +1153,9 @@ try {
   )
   if (!lyricaCandidateText.includes('Lyrica · YouTube 자막'))
     throw new Error(`Lyrica source label is missing: ${lyricaCandidateText}`)
-  await cdp.evaluate('document.querySelector(".lyrics-candidate .button").click()')
+  await cdp.evaluate(
+    'document.querySelector(".lyrics-candidate .button").click()',
+  )
   await waitFor(
     () =>
       cdp.evaluate(
@@ -992,16 +1171,23 @@ try {
     !appliedLyricaInfo.includes('싱크: 현재 영상 타임스탬프') ||
     !appliedLyricaInfo.includes('사용자 보정: 없음')
   )
-    throw new Error(`Applied Lyrica information is incorrect: ${appliedLyricaInfo}`)
+    throw new Error(
+      `Applied Lyrica information is incorrect: ${appliedLyricaInfo}`,
+    )
   const savedLyricaLyrics = JSON.parse(
     await readFile(path.join(userData, 'pulse-shelf-data.json'), 'utf8'),
   )
   if (savedLyricaLyrics.data.lyrics[trackBId]?.source !== 'lyrica')
     throw new Error('Selected Lyrica lyrics did not persist their provider')
-  if (savedLyricaLyrics.data.lyrics[trackBId]?.providerSource !== 'youtube_transcript')
-    throw new Error('Selected Lyrica lyrics did not persist their provider source')
+  if (
+    savedLyricaLyrics.data.lyrics[trackBId]?.providerSource !==
+    'youtube_transcript'
+  )
+    throw new Error(
+      'Selected Lyrica lyrics did not persist their provider source',
+    )
   const lyricaRequestsAfterSelection = lyricaRequests
-  await cdp.evaluate('document.querySelectorAll(".cover-item")[0].click()')
+  await clickCoverByTitle(cdp, 'Candidate Song')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -1041,6 +1227,9 @@ try {
       PULSE_SHELF_TEST_USER_DATA: userData,
       PULSE_SHELF_LRCLIB_API: `http://127.0.0.1:${address.port}/api`,
       PULSE_SHELF_LYRICA_API: `http://127.0.0.1:${address.port}`,
+      PULSE_SHELF_AUTO_SYNC_TEST_COMMAND: process.execPath,
+      PULSE_SHELF_AUTO_SYNC_TEST_SCRIPT: autoSyncWorker,
+      PULSE_SHELF_AUTO_SYNC_MOCK_NO_COUNT: '1',
     },
   )
   const restartedPage = await waitFor(async () => {
@@ -1059,7 +1248,7 @@ try {
     () => cdp.evaluate('Boolean(document.querySelector(".cover-item"))'),
     'recent track after restart',
   )
-  await cdp.evaluate('document.querySelectorAll(".cover-item")[0].click()')
+  await clickCoverByTitle(cdp, 'Candidate Song')
   await cdp.evaluate('document.querySelector(".open-now-panel")?.click()')
   await waitFor(
     () =>
@@ -1085,11 +1274,72 @@ try {
     throw new Error(
       `Lyrics sync profile did not persist after restart: ${JSON.stringify(persistedSyncProfile)}`,
     )
-  await cdp.evaluate(`
-    [...document.querySelectorAll('.cover-item')]
-      .find((item) => item.querySelector('strong')?.textContent.includes('Square Track'))
-      ?.click()
-  `)
+  await clickCoverByTitle(cdp, 'No Cover Track')
+  await waitFor(
+    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-generated"))'),
+    'generated timeline after app restart',
+  )
+  const restartedGeneratedTimeline = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
+  )
+  if (
+    !restartedGeneratedTimeline.valid ||
+    restartedGeneratedTimeline.timeline?.lines.length !== 3
+  )
+    throw new Error(
+      `Generated timeline did not persist after restart: ${JSON.stringify(restartedGeneratedTimeline)}`,
+    )
+  await cdp.evaluate(`window.electronAPI.saveLyricsSelection('${trackDId}', {
+    id: 903,
+    trackName: 'Changed Plain Lyrics',
+    artistName: 'Plain Timeline Artist',
+    plainLyrics: 'Plain lyrics',
+    instrumental: false,
+    provider: 'lrclib',
+    sourceLabel: 'LRCLIB',
+  })`)
+  await clickCoverByTitle(cdp, 'Candidate Song')
+  await clickCoverByTitle(cdp, 'No Cover Track')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'document.querySelector(".lyrics-sync-unavailable[role=alert]")?.textContent.includes("현재 가사")',
+      ),
+    'stale generated timeline rejection after lyrics replacement',
+  )
+  const staleGeneratedTimeline = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
+  )
+  if (staleGeneratedTimeline.valid)
+    throw new Error(
+      `Generated timeline stale rejection failed: ${JSON.stringify(staleGeneratedTimeline)}`,
+    )
+  await cdp.evaluate(
+    'document.querySelector("[data-generated-timeline-reset]").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}').then((state) => state.timeline === null)`,
+      ),
+    'generated timeline reset',
+  )
+  const resetPlainState = await cdp.evaluate(`(() => ({
+    hasGenerated: Boolean(document.querySelector('.lyrics-generated')),
+    hasActive: Boolean(document.querySelector('.lyrics-text .is-active')),
+    text: document.querySelector('.lyrics-text__content')?.textContent,
+  }))()`)
+  if (
+    resetPlainState.hasGenerated ||
+    resetPlainState.hasActive ||
+    !resetPlainState.text?.includes('Plain lyrics')
+  )
+    throw new Error(
+      `Generated timeline reset did not restore plain lyrics: ${JSON.stringify(resetPlainState)}`,
+    )
+  const requestsAfterGeneratedTimelineReplacement = trackARequests
+  const lyricaRequestsAfterGeneratedTimelineReplacement = lyricaRequests
+  await clickCoverByTitle(cdp, 'Square Track')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -1097,11 +1347,7 @@ try {
       ),
     'timed lyrics after app restart',
   )
-  await cdp.evaluate(`
-    [...document.querySelectorAll('.cover-item')]
-      .find((item) => item.querySelector('strong')?.textContent.includes('Candidate Song'))
-      ?.click()
-  `)
+  await clickCoverByTitle(cdp, 'Candidate Song')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -1109,7 +1355,16 @@ try {
       ),
     'track A after plain lyrics persistence check',
   )
-  await cdp.evaluate('document.querySelector(".lyrics-sync-status button").click()')
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'Boolean(document.querySelector(".lyrics-sync-status button"))',
+      ),
+    'lyrics sync reset control',
+  )
+  await cdp.evaluate(
+    'document.querySelector(".lyrics-sync-status button").click()',
+  )
   await waitFor(
     () =>
       cdp.evaluate(
@@ -1117,11 +1372,11 @@ try {
       ),
     'lyrics sync reset',
   )
-  if (trackARequests !== requestsAfterSelection)
+  if (trackARequests !== requestsAfterGeneratedTimelineReplacement)
     throw new Error(
       'Restarting the app triggered another LRCLIB request for track A',
     )
-  await cdp.evaluate('document.querySelectorAll(".cover-item")[1].click()')
+  await clickCoverByTitle(cdp, 'Slow Track')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -1139,9 +1394,9 @@ try {
       ),
     'persisted Lyrica lyrics after restart',
   )
-  if (lyricaRequests !== lyricaRequestsAfterSelection)
+  if (lyricaRequests !== lyricaRequestsAfterGeneratedTimelineReplacement)
     throw new Error('Restarting the app triggered another Lyrica request')
-  await cdp.evaluate('document.querySelectorAll(".cover-item")[0].click()')
+  await clickCoverByTitle(cdp, 'Candidate Song')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -1149,7 +1404,8 @@ try {
       ),
     'track A after Lyrica persistence check',
   )
-  await cdp.evaluate('document.querySelectorAll(".cover-item")[3].click()')
+  await cdp.evaluate(`window.electronAPI.removeLyrics('${trackDId}')`)
+  await clickCoverByTitle(cdp, 'No Cover Track')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -1161,7 +1417,8 @@ try {
     'window.dispatchEvent(new CustomEvent("pulse:panel-tab", { detail: "lyrics" }))',
   )
   await waitFor(
-    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-search-panel"))'),
+    () =>
+      cdp.evaluate('Boolean(document.querySelector(".lyrics-search-panel"))'),
     'lyrics panel after Lyrica server error',
   )
   await cdp.evaluate(
@@ -1181,7 +1438,7 @@ try {
     throw new Error(
       `Lyrica server error unexpectedly produced a candidate: ${unexpectedErrorCandidate}`,
     )
-  await cdp.evaluate('document.querySelectorAll(".cover-item")[0].click()')
+  await clickCoverByTitle(cdp, 'Candidate Song')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -1191,7 +1448,7 @@ try {
   )
 
   await cdp.evaluate(`window.electronAPI.removeLyrics('${trackAId}')`)
-  await cdp.evaluate('document.querySelectorAll(".cover-item")[1].click()')
+  await clickCoverByTitle(cdp, 'Slow Track')
   await waitFor(
     () =>
       cdp.evaluate(
@@ -1199,7 +1456,7 @@ try {
       ),
     'track B after removing track A lyrics',
   )
-  await cdp.evaluate('document.querySelectorAll(".cover-item")[0].click()')
+  await clickCoverByTitle(cdp, 'Candidate Song')
   await delay(700)
   const savedAfterRemoval = JSON.parse(
     await readFile(path.join(userData, 'pulse-shelf-data.json'), 'utf8'),
@@ -1213,7 +1470,9 @@ try {
     `window.electronAPI.removeTrack('${trackAId}')`,
   )
   if (!removedWithSync?.exclusionId)
-    throw new Error('Track removal did not create an undo exclusion for sync testing')
+    throw new Error(
+      'Track removal did not create an undo exclusion for sync testing',
+    )
   const restoredWithSync = await cdp.evaluate(
     `window.electronAPI.restoreLibraryExclusion(${JSON.stringify(removedWithSync.exclusionId)})`,
   )

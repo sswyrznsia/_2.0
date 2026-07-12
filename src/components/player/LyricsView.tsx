@@ -7,6 +7,8 @@ import type {
   AutoSyncJob,
   AutoSyncResult,
   AutoSyncStage,
+  GeneratedLyricsTimeline,
+  GeneratedLyricsTimelineState,
   LyricsCandidate,
   LyricsLookupStatus,
   LyricsResult,
@@ -17,6 +19,7 @@ import type {
 import { formatTime } from '../../utils/format'
 import { parseLrc } from '../../utils/lyrics'
 import { adjustLyricTimeMs } from '../../utils/lyricsSync'
+import { splitGeneratedLyricsText } from '../../utils/generatedLyricsTimeline'
 import { EmptyState } from '../common/EmptyState'
 
 type LyricsSearchMode = 'all' | 'synced'
@@ -87,6 +90,10 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
   const [autoSyncStarting, setAutoSyncStarting] = useState(false)
   const [autoSyncPreviewProfile, setAutoSyncPreviewProfile] =
     useState<LyricsSyncProfile | null>(null)
+  const [generatedTimelineState, setGeneratedTimelineState] =
+    useState<GeneratedLyricsTimelineState>({ timeline: null, valid: false })
+  const [autoSyncPreviewTimeline, setAutoSyncPreviewTimeline] =
+    useState<GeneratedLyricsTimeline | null>(null)
   const [autoSyncEditingJobId, setAutoSyncEditingJobId] = useState<
     string | null
   >(null)
@@ -145,6 +152,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         autoSyncJobRef.current = null
         setAutoSyncJob(null)
         setAutoSyncPreviewProfile(null)
+        setAutoSyncPreviewTimeline(null)
         setAutoSyncEditingJobId(null)
         setAutoSyncUiError(null)
         return
@@ -153,6 +161,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       setAutoSyncJob(next)
       if (next.status === 'failed') {
         setAutoSyncPreviewProfile(null)
+        setAutoSyncPreviewTimeline(null)
         setAutoSyncEditingJobId(null)
         setAutoSyncUiError(
           next.error?.message ?? '자동 싱크 분석에 실패했습니다.',
@@ -202,6 +211,23 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     }
   }, [trackId])
 
+  const refreshGeneratedTimeline = useCallback(() => {
+    return window.electronAPI
+      .getGeneratedLyricsTimeline(trackId)
+      .then(setGeneratedTimelineState)
+      .catch(() =>
+        setGeneratedTimelineState({
+          timeline: null,
+          valid: false,
+          reason: 'timeline-invalid',
+        }),
+      )
+  }, [trackId])
+
+  useEffect(() => {
+    void refreshGeneratedTimeline()
+  }, [refreshGeneratedTimeline])
+
   useEffect(() => {
     let active = true
     const onProgress = window.electronAPI.onLyricsAutoSyncProgress((job) => {
@@ -249,9 +275,24 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
   }, [receiveAutoSyncJob, refreshAutoSyncAvailability, trackId])
 
   const rawLines = lyrics?.kind === 'lrc' ? parseLrc(lyrics.content) : []
+  const plainLines =
+    lyrics?.kind === 'text' ? splitGeneratedLyricsText(lyrics.content) : []
   const activeSyncProfile = syncEditing
     ? draftSyncProfile
     : (autoSyncPreviewProfile ?? savedSyncProfile)
+  const activeGeneratedTimeline =
+    autoSyncPreviewTimeline ??
+    (generatedTimelineState.valid ? generatedTimelineState.timeline : null)
+  const generatedTimingByLine = new Map(
+    activeGeneratedTimeline?.lines.map((line) => [line.lineIndex, line]) ?? [],
+  )
+  const generatedLines = plainLines.map((text, index) => ({
+    text,
+    timing: generatedTimingByLine.get(index),
+  }))
+  const autoSyncPreviewing = Boolean(
+    autoSyncPreviewProfile || autoSyncPreviewTimeline,
+  )
   const lines = rawLines.map((line) => ({
     ...line,
     originalTimeMs: Math.round(line.time * 1_000),
@@ -261,10 +302,20 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         activeSyncProfile ?? undefined,
       ) / 1_000,
   }))
-  const activeIndex = lines.reduce(
-    (found, line, index) => (line.time <= currentTime + 0.05 ? index : found),
-    -1,
-  )
+  const activeIndex =
+    lyrics?.kind === 'text'
+      ? generatedLines.reduce(
+          (found, line, index) =>
+            line.timing && line.timing.audioTimeMs / 1_000 <= currentTime + 0.05
+              ? index
+              : found,
+          -1,
+        )
+      : lines.reduce(
+          (found, line, index) =>
+            line.time <= currentTime + 0.05 ? index : found,
+          -1,
+        )
   useEffect(() => {
     if (activeIndex >= 0 && Date.now() >= autoScrollPausedUntil.current)
       lineRefs.current[activeIndex]?.scrollIntoView({
@@ -342,6 +393,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     autoSyncJobRef.current = null
     setAutoSyncJob(null)
     setAutoSyncPreviewProfile(null)
+    setAutoSyncPreviewTimeline(null)
     setAutoSyncEditingJobId(null)
     setAutoSyncConfirming(false)
   }
@@ -379,6 +431,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     const job = autoSyncJobRef.current
     if (!job || (expectedJobId && expectedJobId !== job.jobId)) {
       setAutoSyncPreviewProfile(null)
+      setAutoSyncPreviewTimeline(null)
       setAutoSyncEditingJobId(null)
       return true
     }
@@ -419,6 +472,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     setAutoSyncConfirming(false)
     setAutoSyncStarting(true)
     setAutoSyncPreviewProfile(null)
+    setAutoSyncPreviewTimeline(null)
     setAutoSyncEditingJobId(null)
     setAutoSyncUiError(null)
     try {
@@ -442,6 +496,11 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       )
     )
       return
+    const keepGeneratedTimeline = generatedTimelineState.timeline
+      ? window.confirm(
+          '이 곡에 저장된 AI 줄별 타임라인이 있습니다.\n\n확인: 새 가사와 줄·텍스트가 같으면 유지\n취소: 기존 AI 타임라인 초기화',
+        )
+      : true
     if (!(await clearAutoSyncBeforeLyricsMutation())) return
     searchRequestId.current += 1
     setLoading(false)
@@ -455,6 +514,12 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       void refreshAutoSyncAvailability()
       setSavedSyncProfile(null)
       setDraftSyncProfile({ trackId, offsetMs: 0, anchors: [], updatedAt: 0 })
+      if (!keepGeneratedTimeline) {
+        await window.electronAPI.clearGeneratedLyricsTimeline(trackId)
+        setGeneratedTimelineState({ timeline: null, valid: false })
+      } else {
+        await refreshGeneratedTimeline()
+      }
       setSearchResult(null)
     } finally {
       selectingCandidateRef.current = null
@@ -467,6 +532,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     await window.electronAPI.markLyricsInstrumental(trackId)
     setLyrics({ kind: 'none', content: '', status: 'instrumental' })
     setSearchResult(null)
+    setGeneratedTimelineState({ timeline: null, valid: false })
     void refreshAutoSyncAvailability()
   }
 
@@ -510,6 +576,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       setSavedSyncProfile(saved)
       setDraftSyncProfile(saved)
       setAutoSyncPreviewProfile(null)
+      setAutoSyncPreviewTimeline(null)
       setSyncEditing(false)
       if (autoSyncEditingJobId) {
         const jobId = autoSyncEditingJobId
@@ -528,6 +595,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     setSavedSyncProfile(null)
     setDraftSyncProfile(empty)
     setAutoSyncPreviewProfile(null)
+    setAutoSyncPreviewTimeline(null)
     setAutoSyncEditingJobId(null)
     setSyncEditing(false)
   }
@@ -537,6 +605,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       savedSyncProfile ?? { trackId, offsetMs: 0, anchors: [], updatedAt: 0 },
     )
     setAutoSyncPreviewProfile(null)
+    setAutoSyncPreviewTimeline(null)
     setAutoSyncEditingJobId(null)
     setSyncEditing(false)
   }
@@ -547,6 +616,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       return
     }
     setAutoSyncPreviewProfile(null)
+    setAutoSyncPreviewTimeline(null)
     setAutoSyncEditingJobId(null)
     setDraftSyncProfile(
       savedSyncProfile ?? { trackId, offsetMs: 0, anchors: [], updatedAt: 0 },
@@ -556,9 +626,18 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
 
   const previewAutoSync = () => {
     const result = autoSyncJobRef.current?.result
-    if (!result || !rawLines.length) return
+    if (!result) return
     setSyncEditing(false)
     setAutoSyncEditingJobId(null)
+    if (result.generatedLyricsTimeline && plainLines.length) {
+      setAutoSyncPreviewProfile(null)
+      setAutoSyncPreviewTimeline((timeline) =>
+        timeline ? null : result.generatedLyricsTimeline!,
+      )
+      return
+    }
+    if (!rawLines.length) return
+    setAutoSyncPreviewTimeline(null)
     setAutoSyncPreviewProfile((profile) =>
       profile ? null : autoSyncProfile(result),
     )
@@ -568,6 +647,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     const job = autoSyncJobRef.current
     if (!job?.result || !rawLines.length) return
     setAutoSyncPreviewProfile(null)
+    setAutoSyncPreviewTimeline(null)
     setDraftSyncProfile(autoSyncProfile(job.result))
     setAutoSyncEditingJobId(job.jobId)
     setSelectedLineIndex(Math.max(0, activeIndex))
@@ -577,7 +657,30 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
   const applyAutoSync = async () => {
     const job = autoSyncJobRef.current
     const result = job?.result
-    if (!job || !result?.canApply || !rawLines.length) return
+    if (!job || !result?.canApply) return
+    if (result.generatedLyricsTimeline && plainLines.length) {
+      if (
+        generatedTimelineState.timeline &&
+        !window.confirm(
+          '기존에 저장한 AI 줄별 타임라인을 새 결과로 덮어쓸까요?',
+        )
+      )
+        return
+      try {
+        const saved = await window.electronAPI.saveGeneratedLyricsTimeline(
+          result.generatedLyricsTimeline,
+        )
+        setGeneratedTimelineState({ timeline: saved, valid: true })
+        setAutoSyncPreviewTimeline(null)
+        await discardAutoSync(job.jobId)
+      } catch (error) {
+        setAutoSyncUiError(
+          errorMessage(error, 'AI 줄별 타임라인을 저장하지 못했습니다.'),
+        )
+      }
+      return
+    }
+    if (!rawLines.length) return
     if (
       savedSyncProfile &&
       !window.confirm(
@@ -592,6 +695,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       setSavedSyncProfile(saved)
       setDraftSyncProfile(saved)
       setAutoSyncPreviewProfile(null)
+      setAutoSyncPreviewTimeline(null)
       setAutoSyncEditingJobId(null)
       setSyncEditing(false)
       await discardAutoSync(job.jobId)
@@ -600,6 +704,12 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         errorMessage(error, '자동 싱크 결과를 적용하지 못했습니다.'),
       )
     }
+  }
+
+  const resetGeneratedTimeline = async () => {
+    await window.electronAPI.clearGeneratedLyricsTimeline(trackId)
+    setGeneratedTimelineState({ timeline: null, valid: false })
+    setAutoSyncPreviewTimeline(null)
   }
 
   if (!lyrics) return <div className="lyrics-loading">가사를 불러오는 중…</div>
@@ -650,11 +760,30 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
     )
   if (lyrics.kind === 'text')
     return (
-      <div className="lyrics-text">
+      <div
+        className={
+          activeGeneratedTimeline
+            ? 'lyrics-synced lyrics-generated'
+            : 'lyrics-text'
+        }
+        data-generated-timeline-active={
+          activeGeneratedTimeline ? 'true' : 'false'
+        }
+        data-auto-sync-preview-active={
+          autoSyncPreviewTimeline ? 'true' : 'false'
+        }
+        onWheel={() => {
+          autoScrollPausedUntil.current = Date.now() + 4_000
+        }}
+        onPointerDown={() => {
+          autoScrollPausedUntil.current = Date.now() + 4_000
+        }}
+      >
         <LyricsAppliedInfo
           lyrics={appliedLyrics}
           syncProfile={activeSyncProfile}
-          previewing={Boolean(autoSyncPreviewProfile)}
+          generatedTimeline={activeGeneratedTimeline}
+          previewing={autoSyncPreviewing}
         />
         <LyricsSearchActions
           onFindSynced={() => void search('synced', true)}
@@ -665,8 +794,9 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
           job={autoSyncJob}
           confirming={autoSyncConfirming}
           starting={autoSyncStarting}
-          previewing={Boolean(autoSyncPreviewProfile)}
+          previewing={autoSyncPreviewing}
           hasTimedLyrics={false}
+          hasPlainLyrics={plainLines.length >= 2}
           manualEditing={syncEditing}
           editingAutoResult={autoSyncEditingJobId !== null}
           error={autoSyncUiError}
@@ -679,10 +809,64 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
           onApply={() => void applyAutoSync()}
           onDiscard={() => void discardAutoSync()}
         />
-        <p className="lyrics-sync-unavailable">
-          타임스탬프가 없어 현재 줄 강조를 사용할 수 없습니다.
-        </p>
-        <div className="lyrics-text__content">{lyrics.content}</div>
+        {generatedTimelineState.timeline && !generatedTimelineState.valid && (
+          <p className="lyrics-sync-unavailable" role="alert">
+            저장된 AI 타임라인과 현재 가사의 줄 또는 텍스트가 달라 적용하지
+            않았습니다.
+          </p>
+        )}
+        {(generatedTimelineState.timeline || activeGeneratedTimeline) && (
+          <div className="lyrics-sync-status">
+            <span>
+              {autoSyncPreviewTimeline
+                ? `AI 줄별 타임라인 미리보기 · ${autoSyncPreviewTimeline.lines.length}줄`
+                : generatedTimelineState.valid &&
+                    generatedTimelineState.timeline
+                  ? `AI 줄별 타임라인 · ${generatedTimelineState.timeline.lines.length}줄`
+                  : 'AI 줄별 타임라인 미적용'}
+            </span>
+            {generatedTimelineState.timeline && !autoSyncPreviewTimeline && (
+              <button
+                type="button"
+                data-generated-timeline-reset
+                onClick={() => void resetGeneratedTimeline()}
+              >
+                초기화
+              </button>
+            )}
+          </div>
+        )}
+        {activeGeneratedTimeline ? (
+          generatedLines.map((line, index) => (
+            <button
+              type="button"
+              key={`${index}-${line.text}`}
+              ref={(element) => {
+                lineRefs.current[index] = element
+              }}
+              className={index === activeIndex ? 'is-active' : ''}
+              data-generated-line-index={index}
+              data-generated-line-timed={line.timing ? 'true' : 'false'}
+              disabled={!line.timing}
+              onClick={() => {
+                if (line.timing)
+                  usePlayerStore
+                    .getState()
+                    .seek(line.timing.audioTimeMs / 1_000)
+              }}
+            >
+              {line.text}
+            </button>
+          ))
+        ) : (
+          <>
+            <p className="lyrics-sync-unavailable">
+              줄별 타임라인을 적용하면 현재 줄 강조와 자동 스크롤을 사용할 수
+              있습니다.
+            </p>
+            <div className="lyrics-text__content">{lyrics.content}</div>
+          </>
+        )}
       </div>
     )
   return (
@@ -699,7 +883,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
       <LyricsAppliedInfo
         lyrics={appliedLyrics}
         syncProfile={activeSyncProfile}
-        previewing={Boolean(autoSyncPreviewProfile)}
+        previewing={autoSyncPreviewing}
       />
       <LyricsSearchActions
         onFindSynced={() => void search('synced', true)}
@@ -710,8 +894,9 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         job={autoSyncJob}
         confirming={autoSyncConfirming}
         starting={autoSyncStarting}
-        previewing={Boolean(autoSyncPreviewProfile)}
+        previewing={autoSyncPreviewing}
         hasTimedLyrics={rawLines.length > 0}
+        hasPlainLyrics={false}
         manualEditing={syncEditing}
         editingAutoResult={autoSyncEditingJobId !== null}
         error={autoSyncUiError}
@@ -725,7 +910,7 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         onDiscard={() => void discardAutoSync()}
       />
       <div className="lyrics-sync-status">
-        {syncStatusCopy(activeSyncProfile, Boolean(autoSyncPreviewProfile))}
+        {syncStatusCopy(activeSyncProfile, autoSyncPreviewing)}
         {(savedSyncProfile || syncEditing) &&
           autoSyncEditingJobId === null &&
           autoSyncPreviewProfile === null && (
@@ -875,6 +1060,7 @@ interface LyricsAutoSyncControlsProps {
   starting: boolean
   previewing: boolean
   hasTimedLyrics: boolean
+  hasPlainLyrics: boolean
   manualEditing: boolean
   editingAutoResult: boolean
   error: string | null
@@ -895,6 +1081,7 @@ function LyricsAutoSyncControls({
   starting,
   previewing,
   hasTimedLyrics,
+  hasPlainLyrics,
   manualEditing,
   editingAutoResult,
   error,
@@ -928,6 +1115,8 @@ function LyricsAutoSyncControls({
   }, [running, job?.jobId])
 
   const result = job?.status === 'completed' ? job.result : undefined
+  const hasSupportedLyrics = hasTimedLyrics || hasPlainLyrics
+  const generatedResult = Boolean(result?.generatedLyricsTimeline)
   const overallProgress = autoSyncProgressPercent(job?.overallProgress ?? null)
   const stageProgress = autoSyncProgressPercent(job?.stageProgress ?? null)
   const elapsedMs = job
@@ -940,7 +1129,7 @@ function LyricsAutoSyncControls({
     : 0
   const canStart = Boolean(
     availability?.available &&
-    hasTimedLyrics &&
+    hasSupportedLyrics &&
     !job &&
     !manualEditing &&
     !starting,
@@ -967,8 +1156,8 @@ function LyricsAutoSyncControls({
                   ]
                     .filter(Boolean)
                     .join(' · ')
-                : !hasTimedLyrics
-                  ? '원본 타임스탬프가 있는 동기화 가사가 필요합니다.'
+                : !hasSupportedLyrics
+                  ? '두 줄 이상의 일반 가사 또는 동기화 가사가 필요합니다.'
                   : [availability.gpuName, availability.modelName]
                       .filter(Boolean)
                       .join(' · ') || '자동 싱크를 사용할 수 있습니다.'
@@ -994,7 +1183,7 @@ function LyricsAutoSyncControls({
             : 'lyrics-auto-sync__availability'
         }
         data-auto-sync-availability={
-          availability?.available && hasTimedLyrics
+          availability?.available && hasSupportedLyrics
             ? 'available'
             : 'unavailable'
         }
@@ -1150,7 +1339,11 @@ function LyricsAutoSyncControls({
             </div>
             <div>
               <dt>생성 기준점</dt>
-              <dd>{result.lyricsSyncProfile.anchors.length}개</dd>
+              <dd>
+                {result.generatedLyricsTimeline
+                  ? `${result.generatedLyricsTimeline.lines.length}개 줄별 시간`
+                  : `${result.lyricsSyncProfile.anchors.length}개`}
+              </dd>
             </div>
             <div>
               <dt>매칭되지 않은 줄</dt>
@@ -1206,7 +1399,10 @@ function LyricsAutoSyncControls({
               className="button"
               data-auto-sync-preview
               data-auto-sync-previewing={previewing ? 'true' : 'false'}
-              disabled={!hasTimedLyrics || manualEditing}
+              disabled={
+                manualEditing ||
+                (generatedResult ? !hasPlainLyrics : !hasTimedLyrics)
+              }
               onClick={onPreview}
             >
               {previewing ? '미리 듣기 종료' : '미리 듣기'}
@@ -1215,7 +1411,7 @@ function LyricsAutoSyncControls({
               type="button"
               className="button"
               data-auto-sync-edit
-              disabled={!hasTimedLyrics || manualEditing}
+              disabled={generatedResult || !hasTimedLyrics || manualEditing}
               onClick={onOpenEditor}
             >
               수동 싱크 편집기로 열기
@@ -1224,7 +1420,11 @@ function LyricsAutoSyncControls({
               type="button"
               className="button button--primary"
               data-auto-sync-apply
-              disabled={!result.canApply || !hasTimedLyrics || manualEditing}
+              disabled={
+                !result.canApply ||
+                manualEditing ||
+                (generatedResult ? !hasPlainLyrics : !hasTimedLyrics)
+              }
               onClick={onApply}
             >
               적용
@@ -1356,10 +1556,12 @@ function errorMessage(error: unknown, fallback: string) {
 function LyricsAppliedInfo({
   lyrics,
   syncProfile,
+  generatedTimeline,
   previewing = false,
 }: {
   lyrics?: TrackLyrics
   syncProfile: LyricsSyncProfile | null
+  generatedTimeline?: GeneratedLyricsTimeline | null
   previewing?: boolean
 }) {
   const isVideoSubtitle = Boolean(
@@ -1380,17 +1582,26 @@ function LyricsAppliedInfo({
           : lyrics?.source === 'local-txt'
             ? '로컬 텍스트'
             : '사용자 가사')
-  const sync = isVideoSubtitle
-    ? '현재 영상 타임스탬프'
-    : lyrics?.syncedLyrics
-      ? '원곡 타임스탬프'
-      : '타임스탬프 없음'
+  const sync = generatedTimeline
+    ? previewing
+      ? 'AI 줄별 타임스탬프 미리보기'
+      : 'AI 줄별 타임스탬프'
+    : isVideoSubtitle
+      ? '현재 영상 타임스탬프'
+      : lyrics?.syncedLyrics
+        ? '원곡 타임스탬프'
+        : '타임스탬프 없음'
 
   return (
     <div className="lyrics-applied-info" aria-label="현재 적용된 가사 정보">
       <span>가사 출처: {source}</span>
       <span>싱크: {sync}</span>
-      <span>사용자 보정: {syncCorrectionCopy(syncProfile, previewing)}</span>
+      <span>
+        사용자 보정:{' '}
+        {generatedTimeline
+          ? `${generatedTimeline.lines.length}개 줄별 시간`
+          : syncCorrectionCopy(syncProfile, previewing)}
+      </span>
     </div>
   )
 }

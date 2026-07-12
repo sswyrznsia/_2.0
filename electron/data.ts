@@ -40,6 +40,7 @@ export const createDefaultData = (): StoredAppData => ({
   recentTrackIds: [],
   lyrics: {},
   lyricsSyncProfiles: {},
+  generatedLyricsTimelines: {},
   settings: {
     theme: 'dark',
     restoreLastPage: true,
@@ -209,6 +210,27 @@ export const appDataSchema = z.object({
           processingTimeMs: z.number().finite().nonnegative(),
         })
         .optional(),
+    }),
+  ),
+  generatedLyricsTimelines: z.record(
+    z.string().regex(/^[a-f0-9]{64}$/),
+    z.object({
+      trackId: z.string().regex(/^[a-f0-9]{64}$/),
+      source: z.enum(['ai', 'manual']),
+      lines: z
+        .array(
+          z.object({
+            lineIndex: z.number().int().nonnegative(),
+            textHash: z.string().regex(/^[a-f0-9]{16}$/),
+            audioTimeMs: z.number().int().nonnegative(),
+            confidence: z.number().finite().min(0).max(1).optional(),
+          }),
+        )
+        .max(20_000),
+      lineCount: z.number().int().positive().max(20_000),
+      lyricsTextHash: z.string().regex(/^[a-f0-9]{16}$/),
+      model: z.string().trim().min(1).max(500).optional(),
+      createdAt: z.number().finite().nonnegative(),
     }),
   ),
   settings: settingsSchema,
@@ -545,6 +567,12 @@ export function setPublicData(
         trackIds.has(trackId) && profile.trackId === trackId,
     ),
   )
+  const generatedLyricsTimelines = Object.fromEntries(
+    Object.entries(current.generatedLyricsTimelines).filter(
+      ([trackId, timeline]) =>
+        trackIds.has(trackId) && timeline.trackId === trackId,
+    ),
+  )
   const stored: StoredAppData = {
     ...result.data,
     musicFolders: current.musicFolders,
@@ -572,6 +600,7 @@ export function setPublicData(
     ],
     lyrics,
     lyricsSyncProfiles,
+    generatedLyricsTimelines,
     playerSession: {
       ...result.data.playerSession,
       queueIds: result.data.playerSession.queueIds

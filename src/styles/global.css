@@ -1488,6 +1488,10 @@ svg {
   color: var(--text);
   font-weight: 750;
 }
+.lyrics-generated > button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
 .lyrics-sync-status {
   display: flex;
   align-items: center;

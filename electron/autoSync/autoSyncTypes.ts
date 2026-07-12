@@ -164,6 +164,7 @@ export interface AutoSyncTrackSource {
   audioPath: string
   fileSize: number
   modifiedAt: number
+  duration?: number
   plainLyrics?: string
   syncedLyrics?: string
   provider?: string

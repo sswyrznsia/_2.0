@@ -18,6 +18,8 @@ import WebSocket from 'ws'
 
 const root = process.cwd()
 const trackId = process.env.PULSE_SHELF_AUTO_SYNC_TRACK_ID?.trim()
+const plainOnly = process.env.PULSE_SHELF_AUTO_SYNC_PLAIN_ONLY_TEST === '1'
+const allowCache = process.env.PULSE_SHELF_AUTO_SYNC_ALLOW_CACHE === '1'
 const analysisTimeoutMs = 6 * 60 * 1_000
 const realStorePath = path.join(
   process.env.APPDATA ?? '',
@@ -220,8 +222,17 @@ async function prepareIsolatedStore(realStoreBytes, isolatedStorePath) {
     )
 
   data.lyricsSyncProfiles ??= {}
+  data.generatedLyricsTimelines ??= {}
   const replacedProfile = data.lyricsSyncProfiles[trackId] ?? null
+  const replacedTimeline = data.generatedLyricsTimelines[trackId] ?? null
   delete data.lyricsSyncProfiles[trackId]
+  delete data.generatedLyricsTimelines[trackId]
+  if (plainOnly) {
+    const selectedLyrics = data.lyrics?.[trackId]
+    if (!selectedLyrics?.plainLyrics)
+      throw new Error('The selected live track does not have plain lyrics')
+    delete selectedLyrics.syncedLyrics
+  }
   data.settings = {
     ...data.settings,
     restoreLastPage: false,
@@ -243,6 +254,7 @@ async function prepareIsolatedStore(realStoreBytes, isolatedStorePath) {
     target: structuredClone(target),
     other: structuredClone(other),
     replacedProfile,
+    replacedTimeline,
   }
 }
 
@@ -389,9 +401,13 @@ async function selectTargetWithLyrics(cdp, target) {
   await waitFor(
     () =>
       cdp.evaluate(
-        'Boolean(document.querySelector(".lyrics-synced [data-auto-sync-trigger]"))',
+        `Boolean(document.querySelector(${JSON.stringify(
+          plainOnly
+            ? '.lyrics-text [data-auto-sync-trigger], .lyrics-generated [data-auto-sync-trigger]'
+            : '.lyrics-synced [data-auto-sync-trigger]',
+        )}))`,
       ),
-    'timed target lyrics and auto-sync controls',
+    `${plainOnly ? 'plain-only' : 'timed'} target lyrics and auto-sync controls`,
     30_000,
   )
 }
@@ -438,7 +454,7 @@ function validateResult(job) {
   const result = job?.result
   if (!result || result.trackId !== trackId)
     throw new Error('Completed job does not contain the target result DTO')
-  if (result.cacheHit)
+  if (result.cacheHit && !allowCache)
     throw new Error(
       'The live test reused an existing auto-sync cache; use a track/cache key that has not already been analyzed',
     )
@@ -446,23 +462,62 @@ function validateResult(job) {
     throw new Error(
       `Real result did not pass the apply gate: ${JSON.stringify(result)}`,
     )
-  const anchors = result.lyricsSyncProfile?.anchors
-  if (!Array.isArray(anchors) || anchors.length < 3)
-    throw new Error(
-      'Real result did not produce at least three profile anchors',
-    )
-  for (let index = 1; index < anchors.length; index += 1) {
-    if (
-      anchors[index - 1].lyricTimeMs >= anchors[index].lyricTimeMs ||
-      anchors[index - 1].audioTimeMs >= anchors[index].audioTimeMs
-    )
-      throw new Error('Real result anchors are not strictly chronological')
+  if (plainOnly) {
+    const lines = result.generatedLyricsTimeline?.lines
+    if (!Array.isArray(lines) || lines.length < 3)
+      throw new Error(
+        'Real plain-only result did not produce at least three line timings',
+      )
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index]
+      if (
+        !/^[a-f0-9]{16}$/.test(line.textHash) ||
+        typeof line.confidence !== 'number' ||
+        line.confidence < 0.75 ||
+        (index > 0 &&
+          (lines[index - 1].lineIndex >= line.lineIndex ||
+            lines[index - 1].audioTimeMs >= line.audioTimeMs))
+      )
+        throw new Error(
+          'Real generated line timings are unsafe or not chronological',
+        )
+    }
+  } else {
+    const anchors = result.lyricsSyncProfile?.anchors
+    if (!Array.isArray(anchors) || anchors.length < 3)
+      throw new Error(
+        'Real result did not produce at least three profile anchors',
+      )
+    for (let index = 1; index < anchors.length; index += 1) {
+      if (
+        anchors[index - 1].lyricTimeMs >= anchors[index].lyricTimeMs ||
+        anchors[index - 1].audioTimeMs >= anchors[index].audioTimeMs
+      )
+        throw new Error('Real result anchors are not strictly chronological')
+    }
   }
   if (!(result.processingTimeMs > 0))
     throw new Error('Real result did not report processing time')
   if (!(result.peakGpuMemoryMiB > 0))
     throw new Error('Real result did not report peak GPU memory')
   return result
+}
+
+function validateAppliedTimeline(state, result) {
+  const timeline = state?.timeline
+  if (
+    !state?.valid ||
+    !timeline ||
+    timeline.trackId !== trackId ||
+    timeline.source !== 'ai' ||
+    timeline.createdAt <= 0 ||
+    JSON.stringify(timeline.lines) !==
+      JSON.stringify(result.generatedLyricsTimeline?.lines)
+  )
+    throw new Error(
+      `Applied generated timeline is invalid: ${JSON.stringify(state)}`,
+    )
+  return timeline
 }
 
 function validateAppliedProfile(profile, result) {
@@ -498,7 +553,7 @@ function validateAppliedProfile(profile, result) {
 async function seekAndCaptureHighlight(cdp) {
   const selected = await cdp.evaluate(`(() => {
     const buttons = [...document.querySelectorAll(
-      '.lyrics-synced > button:not(.lyrics-sync-trigger)',
+      '.lyrics-synced > button:not(.lyrics-sync-trigger):not(:disabled)',
     )]
     if (!buttons.length) return null
     const index = Math.min(buttons.length - 1, Math.max(0, Math.floor(buttons.length / 2)))
@@ -582,6 +637,11 @@ async function readIsolatedProfile(isolatedStorePath) {
   return stored.data?.lyricsSyncProfiles?.[trackId] ?? null
 }
 
+async function readIsolatedTimeline(isolatedStorePath) {
+  const stored = JSON.parse(await readFile(isolatedStorePath, 'utf8'))
+  return stored.data?.generatedLyricsTimelines?.[trackId] ?? null
+}
+
 const realStoreBytes = await readFile(realStorePath)
 const realStoreSha256 = createHash('sha256')
   .update(realStoreBytes)
@@ -605,14 +665,13 @@ try {
   debugPort = await reservePort()
   viteUrl = `http://127.0.0.1:${vitePort}/`
 
-  const { target, other, replacedProfile } = await prepareIsolatedStore(
-    realStoreBytes,
-    isolatedStorePath,
-  )
+  const { target, other, replacedProfile, replacedTimeline } =
+    await prepareIsolatedStore(realStoreBytes, isolatedStorePath)
   const viteEnvironment = {
     ...process.env,
     ELECTRON_STARTUP_PREVENT: '1',
   }
+  const viteStartedAt = Date.now()
   vite = startChild(
     'vite',
     'cmd.exe',
@@ -625,6 +684,21 @@ try {
     viteEnvironment,
   )
   await waitFor(async () => (await fetch(viteUrl)).ok, 'Vite server', 40_000)
+  await waitFor(
+    async () => {
+      const mainBundle = path.join(root, 'dist-electron', 'main.js')
+      const [bundleStats, content] = await Promise.all([
+        stat(mainBundle),
+        readFile(mainBundle, 'utf8'),
+      ])
+      return (
+        bundleStats.mtimeMs >= viteStartedAt &&
+        content.includes('generated-lyrics-timeline:get')
+      )
+    },
+    'current Electron main bundle',
+    40_000,
+  )
 
   electronSession = await launchElectron(userData, viteUrl, vitePort, debugPort)
   let { cdp } = electronSession
@@ -679,9 +753,15 @@ try {
   const profileBeforeAnalysis = await cdp.evaluate(
     `window.electronAPI.getLyricsSyncProfile(${JSON.stringify(trackId)})`,
   )
-  if (profileBeforeAnalysis !== null)
+  const timelineBeforeAnalysis = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline(${JSON.stringify(trackId)})`,
+  )
+  if (
+    profileBeforeAnalysis !== null ||
+    timelineBeforeAnalysis?.timeline !== null
+  )
     throw new Error(
-      'The isolated target profile changed before analysis completed',
+      'The isolated target sync data changed before analysis completed',
     )
 
   await waitFor(
@@ -690,7 +770,8 @@ try {
         const stages = window.__pulseAutoSyncLive?.progress?.map((job) => job.stage) ?? []
         const visible = document.querySelector('[data-auto-sync-progress]')
           ?.getAttribute('data-auto-sync-stage')
-        return stages.some((stage) => stage !== 'preparing') && visible
+        const resultVisible = Boolean(document.querySelector('[data-auto-sync-result]'))
+        return (${allowCache ? 'resultVisible ||' : ''} stages.some((stage) => stage !== 'preparing')) && (visible || resultVisible)
           ? { stages, visible }
           : null
       })()`),
@@ -749,7 +830,7 @@ try {
   const missingStages = requiredStages.filter(
     (stage) => !observedStages.includes(stage),
   )
-  if (missingStages.length)
+  if (missingStages.length && !result.cacheHit)
     throw new Error(
       `Worker progress stages were not observed: ${missingStages.join(', ')}`,
     )
@@ -760,36 +841,59 @@ try {
   await waitFor(
     () =>
       cdp.evaluate(
-        `document.querySelector('.lyrics-synced')
-          ?.getAttribute('data-auto-sync-preview-active') === 'true'`,
+        `document.querySelector(${JSON.stringify(
+          plainOnly ? '.lyrics-generated' : '.lyrics-synced',
+        )})?.getAttribute('data-auto-sync-preview-active') === 'true'`,
       ),
     'temporary auto-sync preview',
   )
   const profileDuringPreview = await cdp.evaluate(
     `window.electronAPI.getLyricsSyncProfile(${JSON.stringify(trackId)})`,
   )
-  if (profileDuringPreview !== null)
-    throw new Error('Preview persisted the auto-sync profile before Apply')
+  const timelineDuringPreview = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline(${JSON.stringify(trackId)})`,
+  )
+  if (profileDuringPreview !== null || timelineDuringPreview?.timeline !== null)
+    throw new Error('Preview persisted auto-sync data before Apply')
 
   await cdp.evaluate('document.querySelector("[data-auto-sync-apply]").click()')
-  const appliedProfile = validateAppliedProfile(
-    await waitFor(
-      async () => {
-        const profile = await cdp.evaluate(
-          `window.electronAPI.getLyricsSyncProfile(${JSON.stringify(trackId)})`,
-        )
-        return profile?.source === 'ai' ? profile : null
-      },
-      'persisted AI sync profile',
-      20_000,
-    ),
-    result,
-  )
+  const appliedProfile = plainOnly
+    ? null
+    : validateAppliedProfile(
+        await waitFor(
+          async () => {
+            const profile = await cdp.evaluate(
+              `window.electronAPI.getLyricsSyncProfile(${JSON.stringify(trackId)})`,
+            )
+            return profile?.source === 'ai' ? profile : null
+          },
+          'persisted AI sync profile',
+          20_000,
+        ),
+        result,
+      )
+  const appliedTimeline = plainOnly
+    ? validateAppliedTimeline(
+        await waitFor(
+          async () => {
+            const state = await cdp.evaluate(
+              `window.electronAPI.getGeneratedLyricsTimeline(${JSON.stringify(trackId)})`,
+            )
+            return state?.valid ? state : null
+          },
+          'persisted AI generated timeline',
+          20_000,
+        ),
+        result,
+      )
+    : null
   await waitFor(
     () =>
       cdp.evaluate(
         `document.querySelector('.lyrics-sync-status')?.textContent
-          ?.includes('AI 자동 싱크')`,
+          ?.includes(${JSON.stringify(
+            plainOnly ? 'AI 줄별 타임라인' : 'AI 자동 싱크',
+          )})`,
       ),
     'applied AI sync UI status',
   )
@@ -806,30 +910,61 @@ try {
   await normalQuit(electronSession)
   electronSession = undefined
   await assertJobsClean(userData)
-  const profileOnDisk = validateAppliedProfile(
-    await readIsolatedProfile(isolatedStorePath),
-    result,
+  const profileOnDisk = plainOnly
+    ? null
+    : validateAppliedProfile(
+        await readIsolatedProfile(isolatedStorePath),
+        result,
+      )
+  const timelineOnDisk = plainOnly
+    ? await readIsolatedTimeline(isolatedStorePath)
+    : null
+  if (
+    plainOnly &&
+    JSON.stringify(timelineOnDisk) !== JSON.stringify(appliedTimeline)
   )
+    throw new Error(
+      'Generated timeline was not persisted to the isolated store',
+    )
 
   electronSession = await launchElectron(userData, viteUrl, vitePort, debugPort)
   ;({ cdp } = electronSession)
   await selectTargetWithLyrics(cdp, target)
-  const restartedProfile = validateAppliedProfile(
-    await waitFor(
-      () =>
-        cdp.evaluate(
-          `window.electronAPI.getLyricsSyncProfile(${JSON.stringify(trackId)})`,
+  const restartedProfile = plainOnly
+    ? null
+    : validateAppliedProfile(
+        await waitFor(
+          () =>
+            cdp.evaluate(
+              `window.electronAPI.getLyricsSyncProfile(${JSON.stringify(trackId)})`,
+            ),
+          'AI profile after isolated-store restart',
         ),
-      'AI profile after isolated-store restart',
-    ),
-    result,
-  )
+        result,
+      )
+  const restartedTimeline = plainOnly
+    ? validateAppliedTimeline(
+        await waitFor(async () => {
+          const state = await cdp.evaluate(
+            `window.electronAPI.getGeneratedLyricsTimeline(${JSON.stringify(trackId)})`,
+          )
+          return state?.valid ? state : null
+        }, 'AI generated timeline after isolated-store restart'),
+        result,
+      )
+    : null
   const restartUiStatus = await waitFor(
     () =>
       cdp.evaluate(`(() => {
         const status = document.querySelector('.lyrics-sync-status')?.textContent?.trim()
         const info = document.querySelector('.lyrics-applied-info')?.textContent?.trim()
-        return status?.includes('AI 자동 싱크') && info?.includes('AI 자동 싱크')
+        const expectedStatus = ${JSON.stringify(
+          plainOnly ? 'AI 줄별 타임라인' : 'AI 자동 싱크',
+        )}
+        const expectedInfo = ${JSON.stringify(
+          plainOnly ? 'AI 줄별 타임스탬프' : 'AI 자동 싱크',
+        )}
+        return status?.includes(expectedStatus) && info?.includes(expectedInfo)
           ? { status, info }
           : null
       })()`),
@@ -862,6 +997,7 @@ try {
       path: realStorePath,
       sha256: realStoreSha256,
       hadTargetProfile: Boolean(replacedProfile),
+      hadTargetTimeline: Boolean(replacedTimeline),
       unchanged: true,
     },
     availability: {
@@ -873,18 +1009,29 @@ try {
     trackIsolationVerified: true,
     result,
     previewDidNotPersist: true,
-    appliedProfile: {
-      source: appliedProfile.source,
-      updatedAt: appliedProfile.updatedAt,
-      anchorCount: appliedProfile.anchors.length,
-      autoSyncMetadata: appliedProfile.autoSyncMetadata,
-      diskAnchorCount: profileOnDisk.anchors.length,
-    },
+    applied: plainOnly
+      ? {
+          kind: 'generated-timeline',
+          source: appliedTimeline.source,
+          createdAt: appliedTimeline.createdAt,
+          lineTimingCount: appliedTimeline.lines.length,
+          diskLineTimingCount: timelineOnDisk.lines.length,
+        }
+      : {
+          kind: 'sync-profile',
+          source: appliedProfile.source,
+          updatedAt: appliedProfile.updatedAt,
+          anchorCount: appliedProfile.anchors.length,
+          autoSyncMetadata: appliedProfile.autoSyncMetadata,
+          diskAnchorCount: profileOnDisk.anchors.length,
+        },
     highlightedLine,
     restart: {
-      source: restartedProfile.source,
-      anchorCount: restartedProfile.anchors.length,
-      autoSyncMetadata: restartedProfile.autoSyncMetadata,
+      source: (restartedTimeline ?? restartedProfile).source,
+      timingCount: plainOnly
+        ? restartedTimeline.lines.length
+        : restartedProfile.anchors.length,
+      autoSyncMetadata: restartedProfile?.autoSyncMetadata,
       ui: restartUiStatus,
       transientJobRestored: false,
     },

@@ -24,6 +24,7 @@ import type {
   AutoSyncLogger,
   AutoSyncTrackSource,
 } from '../electron/autoSync/autoSyncTypes'
+import { validateGeneratedLyricsTimeline } from '../src/utils/generatedLyricsTimeline'
 
 const TRACK_NORMAL = 'a'.repeat(64)
 const TRACK_SLOW = 'b'.repeat(64)
@@ -32,6 +33,7 @@ const TRACK_LOW_QUALITY = 'd'.repeat(64)
 const TRACK_OOM = 'e'.repeat(64)
 const TRACK_TREE = 'f'.repeat(64)
 const TRACK_OTHER = '1'.repeat(64)
+const TRACK_REVERSE = '2'.repeat(64)
 const MOCK_WORKER = path.resolve(
   'scripts',
   'fixtures',
@@ -307,13 +309,59 @@ await run('availability requirements', () =>
       'plain-lyrics-missing',
     )
 
-    const missingSynced = await fixture.service.getAvailability(TRACK_OOM)
-    assert.equal(missingSynced.available, false)
-    assert.deepEqual(missingSynced.missingRequirements, ['synced-lyrics'])
-    await assertStartError(
-      fixture.service.start(TRACK_OOM),
-      'synced-lyrics-missing',
+    const plainOnly = await fixture.service.getAvailability(TRACK_OOM)
+    assert.equal(plainOnly.available, true)
+    assert.deepEqual(plainOnly.missingRequirements, [])
+  }),
+)
+
+await run('plain-only result produces a separate safe generated timeline', () =>
+  withFixture(async (fixture) => {
+    fixture.tracks.set(
+      TRACK_OTHER,
+      trackSource(TRACK_OTHER, fixture.audioPath, {
+        syncedLyrics: undefined,
+      }),
     )
+    await fixture.service.start(TRACK_OTHER)
+    const completed = await waitForJob(fixture.service, TRACK_OTHER, [
+      'completed',
+    ])
+    await waitForIdle(fixture.service)
+    const timeline = completed.result?.generatedLyricsTimeline
+    assert.ok(timeline)
+    assert.deepEqual(
+      timeline.lines.map((line) => line.lineIndex),
+      [0, 2, 3],
+      'the 0.70 confidence line must not enter the generated timeline',
+    )
+    assert.equal(completed.result?.canApply, true)
+    assert.doesNotThrow(() =>
+      validateGeneratedLyricsTimeline(timeline, plainLyrics),
+    )
+  }),
+)
+
+await run('plain-only reverse timing is excluded from automatic apply', () =>
+  withFixture(async (fixture) => {
+    fixture.tracks.set(
+      TRACK_REVERSE,
+      trackSource(TRACK_REVERSE, fixture.audioPath, {
+        syncedLyrics: undefined,
+      }),
+    )
+    await fixture.service.start(TRACK_REVERSE)
+    const completed = await waitForJob(fixture.service, TRACK_REVERSE, [
+      'completed',
+    ])
+    await waitForIdle(fixture.service)
+    assert.deepEqual(
+      completed.result?.generatedLyricsTimeline?.lines.map(
+        (line) => line.lineIndex,
+      ),
+      [0, 3],
+    )
+    assert.equal(completed.result?.canApply, false)
   }),
 )
 

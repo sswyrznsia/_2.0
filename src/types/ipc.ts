@@ -8,6 +8,8 @@ import type {
   LyricsSearchQuery,
   LyricsSearchResult,
   LyricsSyncProfile,
+  GeneratedLyricsTimeline,
+  GeneratedLyricsTimelineState,
   ImportAvailability,
   LibraryExclusion,
   LibraryMutationResult,
@@ -53,6 +55,9 @@ export const IPC = {
   lyricsSyncGet: 'lyrics-sync:get',
   lyricsSyncSave: 'lyrics-sync:save',
   lyricsSyncClear: 'lyrics-sync:clear',
+  generatedLyricsTimelineGet: 'generated-lyrics-timeline:get',
+  generatedLyricsTimelineSave: 'generated-lyrics-timeline:save',
+  generatedLyricsTimelineClear: 'generated-lyrics-timeline:clear',
   lyricsAutoSyncGetAvailability: 'lyrics-auto-sync:get-availability',
   lyricsAutoSyncStart: 'lyrics-auto-sync:start',
   lyricsAutoSyncCancel: 'lyrics-auto-sync:cancel',
@@ -143,6 +148,13 @@ export interface ElectronApi {
     profile: LyricsSyncProfile,
   ) => Promise<LyricsSyncProfile>
   clearLyricsSyncProfile: (trackId: string) => Promise<void>
+  getGeneratedLyricsTimeline: (
+    trackId: string,
+  ) => Promise<GeneratedLyricsTimelineState>
+  saveGeneratedLyricsTimeline: (
+    timeline: GeneratedLyricsTimeline,
+  ) => Promise<GeneratedLyricsTimeline>
+  clearGeneratedLyricsTimeline: (trackId: string) => Promise<void>
   getLyricsAutoSyncAvailability: (
     trackId: string,
   ) => Promise<AutoSyncAvailability>
