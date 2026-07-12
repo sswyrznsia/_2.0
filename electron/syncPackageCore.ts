@@ -665,11 +665,7 @@ export function applySyncPackage(
       const conflict = conflictMap.get(kind)
       if (!conflict) return true
       conflicts += 1
-      return (
-        choice?.conflicts?.[kind] === 'imported' ||
-        (choice?.conflicts?.[kind] === undefined &&
-          conflict.recommended === 'imported')
-      )
+      return choice?.conflicts?.[kind] === 'imported'
     }
     if (record.lyrics && shouldImport('lyrics')) {
       data.lyrics[localTrackId] = { ...record.lyrics, trackId: localTrackId }

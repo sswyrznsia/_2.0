@@ -1,5 +1,5 @@
 import { Download, Upload } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { usePlayerStore } from '../../stores/playerStore'
 import type {
@@ -9,6 +9,7 @@ import type {
   SyncPackageInspection,
   SyncPackageEstimate,
   SyncPackageOperationResult,
+  SyncImportValidationIssue,
 } from '../../types/models'
 import './SyncPackageSettings.css'
 
@@ -37,6 +38,12 @@ export function SyncPackageSettings() {
   const [estimate, setEstimate] = useState<SyncPackageEstimate | null>(null)
   const [lastSummary, setLastSummary] =
     useState<SyncPackageOperationResult['summary']>()
+  const [validationIssues, setValidationIssues] = useState<
+    SyncImportValidationIssue[]
+  >([])
+  const [conflictsOnly, setConflictsOnly] = useState(false)
+  const [highlightedRecordId, setHighlightedRecordId] = useState<string>()
+  const cardRefs = useRef(new Map<string, HTMLElement>())
 
   useEffect(() => {
     let active = true
@@ -66,10 +73,79 @@ export function SyncPackageSettings() {
     [choices, inspection],
   )
 
+  const orderedTracks = useMemo(() => {
+    if (!inspection) return []
+    const tracks = [...inspection.tracks].sort(
+      (left, right) => right.conflicts.length - left.conflicts.length,
+    )
+    return conflictsOnly ? tracks.filter((track) => track.conflicts.length) : tracks
+  }, [conflictsOnly, inspection])
+
   const changeOption = (
     key: keyof SyncPackageExportOptions,
     checked: boolean,
   ) => setOptions((current) => ({ ...current, [key]: checked }))
+
+  const focusRecord = (recordId?: string) => {
+    if (!recordId) return
+    setConflictsOnly(false)
+    setHighlightedRecordId(recordId)
+    window.setTimeout(() => {
+      const card = cardRefs.current.get(recordId)
+      card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const conflictControl = card?.querySelector<HTMLSelectElement>(
+        '[data-sync-conflict-control]',
+      )
+      ;(conflictControl ?? card)?.focus({ preventScroll: true })
+    }, 0)
+    window.setTimeout(() => setHighlightedRecordId(undefined), 1_800)
+  }
+
+  const buildPlan = () => {
+    if (!inspection) return null
+    return {
+      token: inspection.token,
+      tracks: inspection.tracks.map((track) =>
+        choices[track.recordId] ?? { recordId: track.recordId },
+      ),
+      likesMode,
+      playlistMode,
+    }
+  }
+
+  const validatePlanInRenderer = () => {
+    if (!inspection) return [] as SyncImportValidationIssue[]
+    const issues: SyncImportValidationIssue[] = []
+    for (const track of inspection.tracks) {
+      const choice = choices[track.recordId]
+      if (!choice?.mediaAction) {
+        issues.push({
+          recordId: track.recordId,
+          field: 'mediaAction',
+          message: `${track.title}의 미디어 작업이 저장되지 않았습니다.`,
+        })
+        continue
+      }
+      const conflicts =
+        track.matchKind === 'possible' && choice.localTrackId
+          ? (track.candidates.find(
+              (candidate) => candidate.trackId === choice.localTrackId,
+            )?.conflicts ?? [])
+          : track.matchKind === 'possible'
+            ? []
+            : track.conflicts
+      for (const conflict of conflicts) {
+        if (!choice.conflicts?.[conflict.kind]) {
+          issues.push({
+            recordId: track.recordId,
+            field: `conflicts.${conflict.kind}`,
+            message: `${track.title}의 ${conflictLabel(conflict.kind)} 충돌 처리 방식을 선택하세요.`,
+          })
+        }
+      }
+    }
+    return issues
+  }
 
   const exportPackage = async () => {
     setBusy(true)
@@ -88,6 +164,8 @@ export function SyncPackageSettings() {
   const inspectPackage = async () => {
     setBusy(true)
     setMessage('')
+    setValidationIssues([])
+    setConflictsOnly(false)
     try {
       const result = await window.electronAPI.inspectSyncPackage()
       if (result.inspection) {
@@ -128,23 +206,41 @@ export function SyncPackageSettings() {
 
   const applyPackage = async () => {
     if (!inspection) return
+    const rendererIssues = validatePlanInRenderer()
+    if (rendererIssues.length) {
+      setValidationIssues(rendererIssues)
+      setMessage(rendererIssues[0].message)
+      focusRecord(rendererIssues[0].recordId)
+      return
+    }
+    const plan = buildPlan()
+    if (!plan) return
     setBusy(true)
     setMessage('')
+    setValidationIssues([])
     try {
-      const result = await window.electronAPI.importSyncPackage({
-        token: inspection.token,
-        tracks: Object.values(choices),
-        likesMode,
-        playlistMode,
-      })
+      if (import.meta.env.DEV) {
+        console.debug('[sync-package] applying preview', {
+          previewId: plan.token,
+          tracks: plan.tracks.map((choice) => ({
+            recordId: choice.recordId,
+            mediaAction: choice.mediaAction,
+            conflictResolution: Object.keys(choice.conflicts ?? {}),
+          })),
+        })
+      }
+      const result = await window.electronAPI.importSyncPackage(plan)
       setMessage(result.message)
       setLastSummary(result.summary)
+      setValidationIssues(result.validationIssues ?? [])
+      if (!result.success) focusRecord(result.validationIssues?.[0]?.recordId)
       if (result.success) {
         await useAppStore.getState().refreshData()
         const imported = useAppStore.getState().data
         if (imported) usePlayerStore.getState().hydrate(imported)
         setInspection(null)
         setChoices({})
+        setValidationIssues([])
       }
     } catch {
       setMessage(
@@ -161,11 +257,13 @@ export function SyncPackageSettings() {
       [recordId]: {
         ...(current[recordId] ?? { recordId }),
         localTrackId: localTrackId || undefined,
-        mediaAction: localTrackId
+        mediaAction: localTrackId &&
+          inspection?.tracks.find((track) => track.recordId === recordId)
+            ?.mediaAvailable
           ? current[recordId]?.mediaAction === 'replace'
             ? 'replace'
             : 'keep'
-          : current[recordId]?.mediaAction,
+          : 'skip',
         conflicts: Object.fromEntries(
           (
             inspection?.tracks
@@ -206,6 +304,8 @@ export function SyncPackageSettings() {
         conflicts: { ...current[recordId]?.conflicts, [kind]: value },
       },
     }))
+
+  const currentPlanIssues = validatePlanInRenderer()
 
   return (
     <section className="settings-section sync-package-settings">
@@ -337,7 +437,21 @@ export function SyncPackageSettings() {
             </div>
             <div>
               <dt>충돌</dt>
-              <dd>{inspection.conflictCount}</dd>
+              <dd>
+                <button
+                  type="button"
+                  className="sync-package-summary__button"
+                  disabled={inspection.conflictCount === 0}
+                  onClick={() =>
+                    focusRecord(
+                      orderedTracks.find((track) => track.conflicts.length)
+                        ?.recordId,
+                    )
+                  }
+                >
+                  {inspection.conflictCount}
+                </button>
+              </dd>
             </div>
             <div>
               <dt>플레이리스트</dt>
@@ -356,6 +470,19 @@ export function SyncPackageSettings() {
               <dd>{formatBytes(inspection.totalMediaBytes)}</dd>
             </div>
           </dl>
+
+          {inspection.conflictCount > 0 && (
+            <div className="sync-package-conflict-tools">
+              <button
+                type="button"
+                className="button"
+                onClick={() => setConflictsOnly((value) => !value)}
+              >
+                {conflictsOnly ? '전체 곡 보기' : '충돌만 보기'}
+              </button>
+              <small>충돌 카드는 목록의 맨 위에 표시됩니다.</small>
+            </div>
+          )}
 
           <div className="sync-package-policies">
             <label>
@@ -386,10 +513,17 @@ export function SyncPackageSettings() {
           </div>
 
           <div className="sync-package-track-list">
-            {inspection.tracks.map((track) => (
+            {orderedTracks.map((track) => (
               <article
                 key={track.recordId}
-                className={`sync-package-track sync-package-track--${track.matchKind}`}
+                ref={(element) => {
+                  if (element) cardRefs.current.set(track.recordId, element)
+                  else cardRefs.current.delete(track.recordId)
+                }}
+                tabIndex={-1}
+                className={`sync-package-track sync-package-track--${track.matchKind}${
+                  highlightedRecordId === track.recordId ? ' is-highlighted' : ''
+                }${validationIssues.some((issue) => issue.recordId === track.recordId) ? ' is-invalid' : ''}`}
               >
                 <header>
                   <span>
@@ -501,9 +635,9 @@ export function SyncPackageSettings() {
                       <small>가져옴: {conflict.importedSummary}</small>
                     </span>
                     <select
+                      data-sync-conflict-control
                       value={
-                        choices[track.recordId]?.conflicts?.[conflict.kind] ??
-                        conflict.recommended
+                        choices[track.recordId]?.conflicts?.[conflict.kind] ?? ''
                       }
                       onChange={(event) =>
                         chooseConflict(
@@ -518,6 +652,16 @@ export function SyncPackageSettings() {
                     </select>
                   </div>
                 ))}
+                {validationIssues
+                  .filter((issue) => issue.recordId === track.recordId)
+                  .map((issue) => (
+                    <p
+                      className="sync-package-track__error"
+                      key={`${issue.field}-${issue.message}`}
+                    >
+                      {issue.message}
+                    </p>
+                  ))}
               </article>
             ))}
           </div>
@@ -531,6 +675,7 @@ export function SyncPackageSettings() {
               className="button button--primary"
               disabled={
                 busy ||
+                currentPlanIssues.length > 0 ||
                 (selectedMatches === 0 && inspection.playlistCount === 0)
               }
               onClick={() => void applyPackage()}

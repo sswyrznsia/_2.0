@@ -19,9 +19,12 @@ import type {
   PulseShelfSyncPackageV1,
   PulseShelfSyncPackageV2,
   SyncArtworkDescriptor,
+  SyncConflictKind,
   SyncMediaDescriptor,
   SyncPackageEstimate,
   SyncPackageExportOptions,
+  SyncImportValidationIssue,
+  SyncImportTrackChoice,
   SyncPackageImportPlan,
   SyncPackageInspectResult,
   SyncPackageInspection,
@@ -151,6 +154,11 @@ interface PendingInspection {
   packageValue: PulseShelfSyncPackage
   inspection: SyncPackageInspection
   archive?: OpenedSyncArchive
+}
+
+interface ValidatedImportPlan {
+  plan?: SyncPackageImportPlan
+  issues: SyncImportValidationIssue[]
 }
 
 export interface SyncImportRuntimeContext {
@@ -371,26 +379,54 @@ export class SyncPackageService {
     value: unknown,
     runtime: SyncImportRuntimeContext = {},
   ): Promise<SyncPackageOperationResult> {
+    this.logImportPayload(value)
     const plan = importPlanSchema.safeParse(value)
-    if (!plan.success) return failure('가져오기 선택 내용이 올바르지 않습니다.')
+    if (!plan.success) {
+      const issues = plan.error.issues.map((issue) => ({
+        recordId: recordIdAtPath(value, issue.path),
+        field: issue.path.join('.') || 'plan',
+        message: '가져오기 선택 값이 허용된 형식이 아닙니다.',
+        value: schemaIssueValue(issue),
+      }))
+      this.logImportValidation('schema-rejected', undefined, issues)
+      return invalidPlan(issues)
+    }
     if (!this.begin('import'))
       return failure('다른 동기화 패키지 작업이 진행 중입니다.')
     try {
       const pending = this.pending.get(plan.data.token)
-      if (!pending)
-        return failure(
-          '가져오기 미리보기가 만료되었습니다. 파일을 다시 선택해 주세요.',
+      if (!pending) {
+        this.logImportValidation('stale-preview', plan.data.token, [
+          {
+            field: 'token',
+            message: '미리보기 정보가 오래되었습니다. 패키지를 다시 검사하세요.',
+          },
+        ])
+        return stalePreview()
+      }
+      const validated = validateImportPlan(
+        plan.data as SyncPackageImportPlan,
+        pending.inspection,
+      )
+      if (!validated.plan) {
+        this.logImportValidation(
+          'plan-rejected',
+          plan.data.token,
+          validated.issues,
         )
+        return invalidPlan(validated.issues)
+      }
+      const selectedPlan = validated.plan
       const result =
         pending.packageValue.schemaVersion === 2
           ? await withLibraryMutation(() =>
               this.importV2(
                 pending,
-                plan.data as SyncPackageImportPlan,
+                selectedPlan,
                 runtime,
               ),
             )
-          : await this.importV1(pending, plan.data as SyncPackageImportPlan)
+          : await this.importV1(pending, selectedPlan)
       if (result.success) this.pending.delete(plan.data.token)
       return result
     } catch (error) {
@@ -403,6 +439,57 @@ export class SyncPackageService {
     } finally {
       this.end()
     }
+  }
+
+  private logImportPayload(value: unknown) {
+    if (!isDevelopmentTraceEnabled() || !value || typeof value !== 'object')
+      return
+    const payload = value as { token?: unknown; tracks?: unknown }
+    const tracks = Array.isArray(payload.tracks)
+      ? payload.tracks
+          .filter((track): track is Record<string, unknown> =>
+            Boolean(track && typeof track === 'object'),
+          )
+          .map((track) => ({
+            recordId: typeof track.recordId === 'string' ? track.recordId : '',
+            mediaAction:
+              typeof track.mediaAction === 'string' ? track.mediaAction : '',
+            conflictResolution:
+              track.conflicts && typeof track.conflicts === 'object'
+                ? Object.fromEntries(
+                    Object.entries(track.conflicts as Record<string, unknown>)
+                      .filter(([, conflictValue]) =>
+                        typeof conflictValue === 'string',
+                      )
+                      .map(([kind, conflictValue]) => [
+                        kind,
+                        conflictValue,
+                      ]),
+                  )
+                : [],
+          }))
+      : []
+    console.debug('[sync-package] import payload', {
+      previewId: typeof payload.token === 'string' ? payload.token : '',
+      tracks,
+    })
+  }
+
+  private logImportValidation(
+    stage: string,
+    previewId: string | undefined,
+    issues: SyncImportValidationIssue[],
+  ) {
+    if (!isDevelopmentTraceEnabled()) return
+    console.debug('[sync-package] import validation', {
+      stage,
+      previewId: previewId ?? '',
+      rejected: issues.map(({ recordId, field, value }) => ({
+        recordId,
+        field,
+        value,
+      })),
+    })
   }
 
   private async importV1(
@@ -1170,6 +1257,172 @@ function safeError(error: unknown, fallback: string): string {
 
 function failure(message: string): SyncPackageOperationResult {
   return { success: false, cancelled: false, message }
+}
+
+function invalidPlan(
+  validationIssues: SyncImportValidationIssue[],
+): SyncPackageOperationResult {
+  return {
+    success: false,
+    cancelled: false,
+    code: 'invalid-plan',
+    message:
+      validationIssues[0]?.message ??
+      '가져오기 선택 내용을 확인하세요.',
+    validationIssues,
+  }
+}
+
+function stalePreview(): SyncPackageOperationResult {
+  return {
+    success: false,
+    cancelled: false,
+    code: 'stale-preview',
+    message: '미리보기 정보가 오래되었습니다. 패키지를 다시 검사하세요.',
+    validationIssues: [
+      {
+        field: 'token',
+        message: '미리보기 정보가 오래되었습니다. 패키지를 다시 검사하세요.',
+      },
+    ],
+  }
+}
+
+function recordIdAtPath(value: unknown, pathParts: PropertyKey[]): string | undefined {
+  if (!value || typeof value !== 'object' || pathParts[0] !== 'tracks')
+    return undefined
+  const index = pathParts[1]
+  if (typeof index !== 'number') return undefined
+  const tracks = (value as { tracks?: unknown }).tracks
+  if (!Array.isArray(tracks)) return undefined
+  const recordId = (tracks[index] as { recordId?: unknown } | undefined)
+    ?.recordId
+  return typeof recordId === 'string' ? recordId : undefined
+}
+
+function schemaIssueValue(issue: { code: string; input?: unknown }): string {
+  if (typeof issue.input === 'string') return issue.input.slice(0, 80)
+  return issue.code
+}
+
+function isDevelopmentTraceEnabled(): boolean {
+  return process.env.NODE_ENV === 'development' || process.env.PULSE_SHELF_UI_TEST === '1'
+}
+
+export function validateImportPlan(
+  plan: SyncPackageImportPlan,
+  inspection: SyncPackageInspection,
+): ValidatedImportPlan {
+  const issues: SyncImportValidationIssue[] = []
+  if (plan.token !== inspection.token) {
+    issues.push({
+      field: 'token',
+      message: '미리보기 정보가 오래되었습니다. 패키지를 다시 검사하세요.',
+    })
+  }
+
+  const choices = new Map<string, SyncImportTrackChoice>()
+  for (const choice of plan.tracks) {
+    if (choices.has(choice.recordId)) {
+      issues.push({
+        recordId: choice.recordId,
+        field: 'recordId',
+        message: '같은 곡의 가져오기 선택이 두 번 포함되어 있습니다.',
+      })
+    }
+    choices.set(choice.recordId, choice)
+  }
+
+  for (const preview of inspection.tracks) {
+    const choice = choices.get(preview.recordId)
+    if (!choice) {
+      issues.push({
+        recordId: preview.recordId,
+        field: 'recordId',
+        message: `${preview.title}의 가져오기 선택이 저장되지 않았습니다.`,
+      })
+      continue
+    }
+    if (!choice.mediaAction) {
+      issues.push({
+        recordId: preview.recordId,
+        field: 'mediaAction',
+        message: `${preview.title}의 미디어 작업을 선택하세요.`,
+      })
+    } else if (
+      !preview.mediaAvailable &&
+      choice.mediaAction !== 'skip'
+    ) {
+      issues.push({
+        recordId: preview.recordId,
+        field: 'mediaAction',
+        message: `${preview.title}에는 가져올 미디어가 없어 건너뛰기로 설정해야 합니다.`,
+        value: choice.mediaAction,
+      })
+    } else if (
+      preview.matchKind === 'missing' &&
+      !['create', 'skip'].includes(choice.mediaAction)
+    ) {
+      issues.push({
+        recordId: preview.recordId,
+        field: 'mediaAction',
+        message: `${preview.title}의 미디어 작업은 새 곡으로 가져오기 또는 건너뛰기여야 합니다.`,
+        value: choice.mediaAction,
+      })
+    } else if (
+      choice.mediaAction === 'replace' &&
+      !(
+        preview.localTrackId ||
+        (choice.localTrackId &&
+          preview.candidates.some(
+            (candidate) => candidate.trackId === choice.localTrackId,
+          ))
+      )
+    ) {
+      issues.push({
+        recordId: preview.recordId,
+        field: 'mediaAction',
+        message: `${preview.title}의 미디어 교체 대상 로컬 곡을 선택하세요.`,
+      })
+    }
+
+    const effectiveConflicts =
+      preview.matchKind === 'possible' && choice.localTrackId
+        ? (preview.candidates.find(
+            (candidate) => candidate.trackId === choice.localTrackId,
+          )?.conflicts ?? [])
+        : preview.matchKind === 'possible'
+          ? []
+          : preview.conflicts
+    for (const conflict of effectiveConflicts) {
+      if (!choice.conflicts?.[conflict.kind]) {
+        issues.push({
+          recordId: preview.recordId,
+          field: `conflicts.${conflict.kind}`,
+          message: `${preview.title}의 ${conflictLabelForMessage(conflict.kind)} 충돌 처리 방식을 선택하세요.`,
+        })
+      }
+    }
+  }
+  for (const choice of plan.tracks) {
+    if (!inspection.tracks.some((item) => item.recordId === choice.recordId)) {
+      issues.push({
+        recordId: choice.recordId,
+        field: 'recordId',
+        message: '미리보기에 없는 곡 선택이 포함되어 있습니다. 패키지를 다시 검사하세요.',
+      })
+    }
+  }
+  return issues.length ? { issues } : { plan, issues: [] }
+}
+
+function conflictLabelForMessage(kind: SyncConflictKind): string {
+  return {
+    lyrics: '가사',
+    lyricsSyncProfile: 'LyricsSyncProfile',
+    generatedLyricsTimeline: 'GeneratedLyricsTimeline',
+    metadata: '메타데이터',
+  }[kind]
 }
 
 function cancelled(): SyncPackageOperationResult {

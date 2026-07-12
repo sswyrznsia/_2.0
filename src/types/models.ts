@@ -613,6 +613,8 @@ export interface SyncPackageOperationResult {
   success: boolean
   cancelled: boolean
   message: string
+  code?: 'invalid-plan' | 'stale-preview' | 'apply-failed'
+  validationIssues?: SyncImportValidationIssue[]
   data?: AppData
   summary?: {
     matchedTracks: number
@@ -630,6 +632,13 @@ export interface SyncPackageOperationResult {
     skippedMissingMedia?: number
     warnings?: string[]
   }
+}
+
+export interface SyncImportValidationIssue {
+  recordId?: string
+  field: string
+  message: string
+  value?: string
 }
 
 export interface SyncPackageEstimate {

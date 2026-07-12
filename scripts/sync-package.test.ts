@@ -29,6 +29,7 @@ import {
   openSyncArchive,
   writeSyncArchive,
 } from '../electron/syncArchive'
+import { validateImportPlan } from '../electron/ipc/syncPackage'
 
 const trackId = 'a'.repeat(64)
 const secondTrackId = 'b'.repeat(64)
@@ -230,6 +231,80 @@ const plan: SyncPackageImportPlan = {
   likesMode: 'union',
   playlistMode: 'newer',
 }
+const explicitConflictPlan: SyncPackageImportPlan = {
+  ...plan,
+  tracks: [
+    {
+      ...plan.tracks[0],
+      mediaAction: 'skip',
+      conflicts: Object.fromEntries(
+        mergeInspection.tracks[0].conflicts.map((conflict) => [
+          conflict.kind,
+          conflict.recommended,
+        ]),
+      ),
+    },
+  ],
+}
+assert.equal(
+  validateImportPlan(explicitConflictPlan, mergeInspection).issues.length,
+  0,
+  'every visible conflict default must be persisted in the apply plan',
+)
+const unresolvedConflictPlan = structuredClone(explicitConflictPlan)
+delete unresolvedConflictPlan.tracks[0].conflicts?.lyrics
+const unresolvedConflictIssue = validateImportPlan(
+  unresolvedConflictPlan,
+  mergeInspection,
+).issues[0]
+assert.equal(unresolvedConflictIssue?.recordId, incoming.tracks[0].recordId)
+assert.equal(unresolvedConflictIssue?.field, 'conflicts.lyrics')
+const stalePlan = { ...explicitConflictPlan, token: randomUUID() }
+assert.equal(
+  validateImportPlan(stalePlan, mergeInspection).issues[0]?.field,
+  'token',
+  'stale previews must identify the token instead of returning a generic error',
+)
+const missingPreviews = Array.from({ length: 10 }, (_, index) => ({
+  ...structuredClone(mergeInspection.tracks[0]),
+  recordId: randomUUID(),
+  title: `Missing ${index + 1}`,
+  matchKind: 'missing' as const,
+  localTrackId: undefined,
+  candidates: [],
+  conflicts: [],
+  mediaAvailable: true,
+}))
+const reproductionInspection = {
+  ...mergeInspection,
+  tracks: [mergeInspection.tracks[0], ...missingPreviews],
+  exactMatches: 1,
+  missingTracks: 10,
+  conflictCount: mergeInspection.tracks[0].conflicts.length,
+  mediaFiles: 11,
+  creatableTracks: 10,
+}
+const reproductionPlan: SyncPackageImportPlan = {
+  ...explicitConflictPlan,
+  tracks: [
+    explicitConflictPlan.tracks[0],
+    ...missingPreviews.map((preview) => ({
+      recordId: preview.recordId,
+      mediaAction: 'create' as const,
+      existingFileAction: 'keep' as const,
+    })),
+  ],
+}
+assert.equal(
+  validateImportPlan(reproductionPlan, reproductionInspection).issues.length,
+  0,
+  'one exact conflict plus ten missing media tracks must retain ten explicit create actions',
+)
+assert.equal(
+  reproductionPlan.tracks.filter((choice) => choice.mediaAction === 'create')
+    .length,
+  10,
+)
 const merged = applySyncPackage(local, incoming, mergeInspection, plan)
 assert.equal(merged.data.tracks[0].liked, true, 'likes should union by default')
 assert.equal(
