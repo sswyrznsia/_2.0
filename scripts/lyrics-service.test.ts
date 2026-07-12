@@ -15,6 +15,7 @@ import {
   splitGeneratedLyricsText,
   validateGeneratedLyricsTimeline,
 } from '../src/utils/generatedLyricsTimeline'
+import { findActiveLyricLineIndex } from '../src/utils/lyrics'
 
 const track = (overrides: Partial<Track> = {}): Track => ({
   id: 'a'.repeat(64),
@@ -379,6 +380,17 @@ assert.throws(() =>
     ]),
   ),
 )
+
+const sparseTimeline = [10, undefined, 25]
+assert.equal(findActiveLyricLineIndex([10, 18], 9.999), -1)
+assert.equal(findActiveLyricLineIndex([10, 18], 10), 0)
+assert.equal(findActiveLyricLineIndex([10, 18], 17.999), 0)
+assert.equal(findActiveLyricLineIndex([10, 18], 18), 1)
+assert.equal(findActiveLyricLineIndex(sparseTimeline, 24.999), 0)
+assert.equal(findActiveLyricLineIndex(sparseTimeline, 25), 2)
+assert.equal(findActiveLyricLineIndex(sparseTimeline, 300), 2)
+assert.equal(findActiveLyricLineIndex(sparseTimeline, 12), 0)
+assert.equal(findActiveLyricLineIndex(sparseTimeline, Number.NaN), -1)
 
 const generatedLyrics = '첫 줄\n둘째 줄\n셋째 줄'
 assert.deepEqual(

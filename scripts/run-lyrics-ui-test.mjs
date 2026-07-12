@@ -193,6 +193,33 @@ async function clickCoverByTitle(cdp, title) {
   )
 }
 
+async function seekPlayer(cdp, seconds) {
+  await cdp.evaluate(`(() => {
+    const input = document.querySelector('.progress-control input[type="range"]')
+    if (!input) throw new Error('Player progress input is missing')
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    setter.call(input, ${JSON.stringify(String(seconds))})
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })()`)
+}
+
+async function pausePlayer(cdp) {
+  const wasPlaying = await cdp.evaluate(`(() => {
+    const button = document.querySelector('.play-button')
+    const playing = Boolean(button?.querySelector('.lucide-pause'))
+    if (playing) button.click()
+    return playing
+  })()`)
+  if (wasPlaying)
+    await waitFor(
+      () =>
+        cdp.evaluate(
+          `!document.querySelector('.play-button .lucide-pause')`,
+        ),
+      'player paused for timing assertion',
+    )
+}
+
 function fixture() {
   const now = Date.now()
   return {
@@ -544,6 +571,7 @@ try {
   await waitFor(
     () => cdp.evaluate('Boolean(document.querySelector(".cover-item"))'),
     'recent track',
+    60_000,
   )
   await cdp.evaluate('document.querySelector(".cover-item").click()')
   await cdp.evaluate('document.querySelector(".open-now-panel")?.click()')
@@ -828,6 +856,43 @@ try {
     () => cdp.evaluate('Boolean(document.querySelector(".lyrics-synced"))'),
     'synced lyrics after replacing candidate',
   )
+  await pausePlayer(cdp)
+  await seekPlayer(cdp, 0.1)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-synced-line-index="0"]')?.classList.contains('is-active')`,
+      ),
+    'synced first line before next timestamp',
+  )
+  await seekPlayer(cdp, 0.1)
+  await delay(100)
+  const beforeExactSyncedBoundary = await cdp.evaluate(`(() => ({
+    activeIndex: document.querySelector('[data-synced-line-index].is-active')?.getAttribute('data-synced-line-index') ?? null,
+    inputValue: document.querySelector('.progress-control input[type="range"]')?.value ?? null,
+    lineTimes: [...document.querySelectorAll('[data-synced-line-index]')].map((line) => line.getAttribute('data-synced-line-time')),
+    playing: Boolean(document.querySelector('.play-button .lucide-pause')),
+  }))()`)
+  if (beforeExactSyncedBoundary.activeIndex !== '0')
+    throw new Error(
+      `Synced lyrics advanced before the next line timestamp: ${JSON.stringify(beforeExactSyncedBoundary)}`,
+    )
+  await seekPlayer(cdp, 0.2)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-synced-line-index="1"]')?.classList.contains('is-active')`,
+      ),
+    'synced second line at exact timestamp',
+  )
+  await seekPlayer(cdp, 0.1)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-synced-line-index="0"]')?.classList.contains('is-active')`,
+      ),
+    'synced first line after backward seek',
+  )
   const clearedAfterReplacement = await cdp.evaluate(
     `window.electronAPI.getLyricsSyncProfile('${trackAId}')`,
   )
@@ -1071,6 +1136,15 @@ try {
       ),
     'plain-only generated timeline preview',
   )
+  await pausePlayer(cdp)
+  await cdp.evaluate(`(() => {
+    window.__lyricsScrollCalls = []
+    Element.prototype.scrollIntoView = function () {
+      window.__lyricsScrollCalls.push(
+        this.getAttribute('data-generated-line-index') ?? this.textContent ?? '',
+      )
+    }
+  })()`)
   const duringPlainPreview = await cdp.evaluate(
     `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
   )
@@ -1086,6 +1160,24 @@ try {
       ),
     'first generated lyric highlight',
   )
+  const firstGeneratedScrollCount = await cdp.evaluate(
+    'window.__lyricsScrollCalls.length',
+  )
+  await seekPlayer(cdp, 20.7)
+  await delay(100)
+  const generatedBeforeNextTimestamp = await cdp.evaluate(`(() => ({
+    firstActive: document.querySelector('[data-generated-line-index="0"]')?.classList.contains('is-active'),
+    unmatchedActive: document.querySelector('[data-generated-line-index="1"]')?.classList.contains('is-active'),
+    scrollCount: window.__lyricsScrollCalls.length,
+  }))()`)
+  if (
+    !generatedBeforeNextTimestamp.firstActive ||
+    generatedBeforeNextTimestamp.unmatchedActive ||
+    generatedBeforeNextTimestamp.scrollCount !== firstGeneratedScrollCount
+  )
+    throw new Error(
+      `Generated line did not stay active without repeated scrolling: ${JSON.stringify(generatedBeforeNextTimestamp)}`,
+    )
   await cdp.evaluate(
     `document.querySelector('[data-generated-line-index="2"]').click()`,
   )
@@ -1093,9 +1185,32 @@ try {
     () =>
       cdp.evaluate(
         `document.querySelector('[data-generated-line-index="2"]')?.classList.contains('is-active')`,
-      ),
+    ),
     'generated lyric highlight after seek',
   )
+  const secondGeneratedScrollCount = await cdp.evaluate(
+    'window.__lyricsScrollCalls.length',
+  )
+  if (secondGeneratedScrollCount !== firstGeneratedScrollCount + 1)
+    throw new Error('Generated timeline did not scroll exactly once after active line changed')
+  await seekPlayer(cdp, 5)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="0"]')?.classList.contains('is-active')`,
+      ),
+    'generated lyric highlight after backward seek',
+  )
+  const backwardGeneratedScrollCount = await cdp.evaluate(
+    'window.__lyricsScrollCalls.length',
+  )
+  await seekPlayer(cdp, 10)
+  await delay(100)
+  const unchangedGeneratedScrollCount = await cdp.evaluate(
+    'window.__lyricsScrollCalls.length',
+  )
+  if (unchangedGeneratedScrollCount !== backwardGeneratedScrollCount)
+    throw new Error('Generated timeline scrolled while the active line was unchanged')
   await cdp.evaluate('document.querySelector("[data-auto-sync-apply]").click()')
   await waitFor(
     () =>

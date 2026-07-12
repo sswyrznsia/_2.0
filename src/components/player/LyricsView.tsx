@@ -17,7 +17,7 @@ import type {
   TrackLyrics,
 } from '../../types/models'
 import { formatTime } from '../../utils/format'
-import { parseLrc } from '../../utils/lyrics'
+import { findActiveLyricLineIndex, parseLrc } from '../../utils/lyrics'
 import { adjustLyricTimeMs } from '../../utils/lyricsSync'
 import { splitGeneratedLyricsText } from '../../utils/generatedLyricsTimeline'
 import { EmptyState } from '../common/EmptyState'
@@ -302,27 +302,28 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         activeSyncProfile ?? undefined,
       ) / 1_000,
   }))
-  const activeIndex =
+  const activeIndex = findActiveLyricLineIndex(
     lyrics?.kind === 'text'
-      ? generatedLines.reduce(
-          (found, line, index) =>
-            line.timing && line.timing.audioTimeMs / 1_000 <= currentTime + 0.05
-              ? index
-              : found,
-          -1,
+      ? generatedLines.map((line) =>
+          line.timing ? line.timing.audioTimeMs / 1_000 : undefined,
         )
-      : lines.reduce(
-          (found, line, index) =>
-            line.time <= currentTime + 0.05 ? index : found,
-          -1,
-        )
+      : lines.map((line) => line.time),
+    currentTime,
+  )
+  const activeLineIdentity = [
+    trackId,
+    lyrics?.kind ?? 'none',
+    lyrics?.content ?? '',
+    activeGeneratedTimeline?.createdAt ?? 'no-generated-timeline',
+    activeIndex,
+  ].join(':')
   useEffect(() => {
     if (activeIndex >= 0 && Date.now() >= autoScrollPausedUntil.current)
       lineRefs.current[activeIndex]?.scrollIntoView({
         block: 'center',
         behavior: 'smooth',
       })
-  }, [activeIndex])
+  }, [activeIndex, activeLineIdentity])
 
   useEffect(() => {
     if (!loading) return
@@ -990,6 +991,8 @@ function LoadedLyrics({ trackId }: { trackId: string }) {
         <button
           type="button"
           key={`${line.time}-${index}`}
+          data-synced-line-index={index}
+          data-synced-line-time={line.time}
           ref={(element) => {
             lineRefs.current[index] = element
           }}

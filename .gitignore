@@ -16,6 +16,7 @@ dist-ssr
 
 # Local-only automatic lyrics sync PoC runtimes and model caches
 .venv-auto-sync/
+.venv-forced-aligner/
 .poc-cache/
 .poc-tmp/
 tools/auto-sync-poc/results/*.json

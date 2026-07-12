@@ -124,13 +124,20 @@ async function waitForJob(
   trackId: string,
   statuses: AutoSyncJobStatus[],
 ): Promise<AutoSyncJob> {
-  return waitFor(
-    () => {
-      const job = service.getJob(trackId)
-      return job && statuses.includes(job.status) ? job : undefined
-    },
-    `${trackId.slice(0, 8)} job ${statuses.join('/')}`,
-  )
+  try {
+    return await waitFor(
+      () => {
+        const job = service.getJob(trackId)
+        return job && statuses.includes(job.status) ? job : undefined
+      },
+      `${trackId.slice(0, 8)} job ${statuses.join('/')}`,
+    )
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; latest job=${JSON.stringify(service.getJob(trackId))}`,
+      { cause: error },
+    )
+  }
 }
 
 async function waitForIdle(service: AutoSyncService) {
@@ -326,7 +333,13 @@ await run('plain-only result produces a separate safe generated timeline', () =>
     await fixture.service.start(TRACK_OTHER)
     const completed = await waitForJob(fixture.service, TRACK_OTHER, [
       'completed',
+      'failed',
     ])
+    assert.equal(
+      completed.status,
+      'completed',
+      `plain-only mock failed: ${JSON.stringify(fixture.logs)}`,
+    )
     await waitForIdle(fixture.service)
     const timeline = completed.result?.generatedLyricsTimeline
     assert.ok(timeline)
