@@ -7,6 +7,8 @@ import {
 } from '../electron/lyricsService'
 import {
   adjustLyricTimeMs,
+  MAX_LYRICS_SYNC_OFFSET_MS,
+  parseLyricsOffsetSeconds,
   validateLyricsSyncProfile,
 } from '../src/utils/lyricsSync'
 import {
@@ -482,6 +484,13 @@ assert.equal(
 )
 assert.equal(
   adjustLyricTimeMs(
+    10_000,
+    syncProfile([{ lyricTimeMs: 5_000, audioTimeMs: 8_000 }], 1_000),
+  ),
+  14_000,
+)
+assert.equal(
+  adjustLyricTimeMs(
     50_000,
     syncProfile([
       { lyricTimeMs: 0, audioTimeMs: 0 },
@@ -489,6 +498,19 @@ assert.equal(
     ]),
   ),
   51_000,
+)
+assert.equal(
+  adjustLyricTimeMs(
+    50_000,
+    syncProfile(
+      [
+        { lyricTimeMs: 0, audioTimeMs: 0 },
+        { lyricTimeMs: 100_000, audioTimeMs: 102_000 },
+      ],
+      1_000,
+    ),
+  ),
+  52_000,
 )
 assert.ok(
   Math.abs(
@@ -503,7 +525,45 @@ assert.ok(
     ) - 41_666.6667,
   ) < 0.01,
 )
+assert.ok(
+  Math.abs(
+    adjustLyricTimeMs(
+      35_000,
+      syncProfile(
+        [
+          { lyricTimeMs: 0, audioTimeMs: 5_000 },
+          { lyricTimeMs: 30_000, audioTimeMs: 35_000 },
+          { lyricTimeMs: 60_000, audioTimeMs: 75_000 },
+          { lyricTimeMs: 90_000, audioTimeMs: 105_000 },
+        ],
+        1_000,
+      ),
+    ) - 42_666.6667,
+  ) < 0.01,
+)
 assert.equal(adjustLyricTimeMs(100, syncProfile([], -1_000)), 0)
+assert.equal(parseLyricsOffsetSeconds('-0.500'), -500)
+assert.equal(parseLyricsOffsetSeconds('+1.250'), 1250)
+assert.equal(parseLyricsOffsetSeconds('0'), 0)
+assert.equal(parseLyricsOffsetSeconds('1.2345'), null)
+assert.equal(parseLyricsOffsetSeconds('Infinity'), null)
+assert.equal(parseLyricsOffsetSeconds('61'), null)
+assert.equal(
+  adjustLyricTimeMs(
+    50_000,
+    syncProfile(
+      [
+        { lyricTimeMs: 0, audioTimeMs: 5_000 },
+        { lyricTimeMs: 100_000, audioTimeMs: 110_000 },
+      ],
+      1_000,
+    ),
+  ),
+  58_500,
+)
+assert.throws(() =>
+  validateLyricsSyncProfile(syncProfile([], MAX_LYRICS_SYNC_OFFSET_MS + 1)),
+)
 assert.throws(() =>
   validateLyricsSyncProfile(
     syncProfile([

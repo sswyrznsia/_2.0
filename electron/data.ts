@@ -11,6 +11,7 @@ import type {
   TrackLyrics,
   LyricsSyncProfile,
 } from '../src/types/models'
+import { MAX_LYRICS_SYNC_OFFSET_MS } from '../src/utils/lyricsSync'
 
 export interface StoredTrack extends Track {
   filePath: string
@@ -206,7 +207,11 @@ export const appDataSchema = z.object({
     z.string().regex(/^[a-f0-9]{64}$/),
     z.object({
       trackId: z.string().regex(/^[a-f0-9]{64}$/),
-      offsetMs: z.number().finite(),
+      offsetMs: z
+        .number()
+        .int()
+        .min(-MAX_LYRICS_SYNC_OFFSET_MS)
+        .max(MAX_LYRICS_SYNC_OFFSET_MS),
       anchors: z
         .array(
           z.object({
@@ -405,8 +410,7 @@ function migrateData(value: unknown): unknown {
         defaults.settings.taskbarModeShortcuts,
       taskbarModeOpacity: oldSettings.taskbarModeOpacity ?? 1,
       taskbarLyricsEnabled: oldSettings.taskbarLyricsEnabled ?? true,
-      taskbarLyricsDisplay:
-        oldSettings.taskbarLyricsDisplay ?? 'current-next',
+      taskbarLyricsDisplay: oldSettings.taskbarLyricsDisplay ?? 'current-next',
     }
     if (settings.taskbarTogglePosition === 'center')
       settings.taskbarTogglePosition = 'custom'

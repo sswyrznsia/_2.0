@@ -1442,7 +1442,11 @@ svg {
   outline: 0;
   color: var(--text);
   background: var(--surface);
-  font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    13px/1.55 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
 }
 .manual-lyrics-input textarea:focus {
   border-color: var(--accent);
@@ -1609,6 +1613,54 @@ svg {
   flex-wrap: wrap;
   gap: 6px;
 }
+.lyrics-sync-editor > .lyrics-global-offset,
+.lyrics-sync-editor > .lyrics-sync-editor__anchors {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+.lyrics-global-offset {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.lyrics-global-offset__value {
+  color: var(--accent-strong) !important;
+  font-variant-numeric: tabular-nums;
+}
+.lyrics-global-offset__buttons {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.lyrics-global-offset__buttons button,
+.lyrics-global-offset__reset {
+  min-width: 0;
+}
+.lyrics-global-offset__input {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.lyrics-global-offset__input input {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--panel-2);
+  font: inherit;
+}
+.lyrics-global-offset__input input:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+}
+.lyrics-sync-editor__anchors {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
 .generated-timeline-status-actions {
   display: flex;
   flex: 0 0 auto;
@@ -1684,14 +1736,18 @@ svg {
   background: #18233d;
   color: #f4f7ff;
   border: 1px solid #35466f;
+  outline-color: #78a2ff;
 }
-.generated-timeline-editor .generated-timeline-editor__control:hover:not(:disabled) {
+.generated-timeline-editor
+  .generated-timeline-editor__control:hover:not(:disabled) {
   background: #22345c;
   border-color: #5270b5;
 }
-.generated-timeline-editor .generated-timeline-editor__control:active:not(:disabled) {
+.generated-timeline-editor
+  .generated-timeline-editor__control:active:not(:disabled) {
   background: #2c4580;
 }
+.generated-timeline-editor .generated-timeline-editor__control:focus,
 .generated-timeline-editor .generated-timeline-editor__control:focus-visible {
   outline: 2px solid #78a2ff;
   outline-offset: 2px;
@@ -1708,9 +1764,26 @@ svg {
   color: #ffd7e1;
   border-color: #71364c;
 }
-.generated-timeline-editor .generated-timeline-editor__control--danger:hover:not(:disabled) {
+.generated-timeline-editor
+  .generated-timeline-editor__control--danger:hover:not(:disabled) {
   background: #492236;
   border-color: #a84e6e;
+}
+.generated-timeline-editor
+  .generated-timeline-editor__control--danger:disabled {
+  background: #151d30;
+  color: #7f8aa8;
+  border-color: #29344f;
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.generated-timeline-editor
+  button.generated-timeline-editor__control--danger:disabled {
+  background: #151d30 !important;
+  color: #7f8aa8 !important;
+  border-color: #29344f !important;
+  opacity: 0.7 !important;
+  cursor: not-allowed;
 }
 .generated-timeline-editor__input {
   display: grid;
@@ -2685,10 +2758,8 @@ kbd {
   width: 100%;
   height: 100%;
   grid-template-columns:
-    minmax(210px, 0.7fr) minmax(360px, 1.1fr) minmax(300px, 500px) minmax(
-      220px,
-      0.65fr
-    );
+    minmax(210px, 0.7fr) minmax(360px, 1.1fr) minmax(300px, 500px)
+    minmax(220px, 0.65fr);
   align-items: center;
   gap: 14px;
   padding: 3px 10px;
@@ -2804,16 +2875,20 @@ kbd {
   line-height: 16px;
 }
 @keyframes taskbar-lyrics-fade {
-  from { opacity: 0.35; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0.35;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 @media (max-width: 1120px) {
   .taskbar-mode {
     grid-template-columns:
-      minmax(150px, 0.65fr) minmax(260px, 1fr) minmax(220px, 320px) minmax(
-        205px,
-        0.65fr
-      );
+      minmax(150px, 0.65fr) minmax(260px, 1fr) minmax(220px, 320px)
+      minmax(205px, 0.65fr);
   }
   .taskbar-mode__lyrics {
     min-width: 220px;
@@ -2823,9 +2898,9 @@ kbd {
 @media (max-width: 760px) {
   .taskbar-mode {
     grid-template-columns: minmax(150px, 0.8fr) minmax(250px, 1.2fr) minmax(
-      205px,
-      0.65fr
-    );
+        205px,
+        0.65fr
+      );
   }
   .taskbar-mode__lyrics {
     display: none;

@@ -92,7 +92,10 @@ import type {
 } from '../src/types/models'
 import { extractYouTubeVideoId, isYouTubeVideoUrl } from '../src/utils/youtube'
 import { findActiveLyricLineIndex, parseLrc } from '../src/utils/lyrics'
-import { adjustLyricTimeMs } from '../src/utils/lyricsSync'
+import {
+  adjustLyricTimeMs,
+  MAX_LYRICS_SYNC_OFFSET_MS,
+} from '../src/utils/lyricsSync'
 import {
   splitGeneratedLyricsText,
   validateGeneratedLyricsTimeline,
@@ -201,8 +204,7 @@ function taskbarLyricsSnapshot(snapshot: PlayerSnapshot, settings: Settings) {
     const profile = data.lyricsSyncProfiles[trackId]
     const lines = parseLrc(lyrics.syncedLyrics).map((line) => ({
       text: line.text,
-      time:
-        adjustLyricTimeMs(Math.round(line.time * 1_000), profile) / 1_000,
+      time: adjustLyricTimeMs(Math.round(line.time * 1_000), profile) / 1_000,
     }))
     const activeIndex = findActiveLyricLineIndex(
       lines.map((line) => line.time),
@@ -230,8 +232,12 @@ function taskbarLyricsSnapshot(snapshot: PlayerSnapshot, settings: Settings) {
     return hidden
   }
   const textLines = splitGeneratedLyricsText(lyrics.plainLyrics)
+  const profile = data.lyricsSyncProfiles[trackId]
   const timingByLine = new Map(
-    timeline.lines.map((line) => [line.lineIndex, line.audioTimeMs / 1_000]),
+    timeline.lines.map((line) => [
+      line.lineIndex,
+      adjustLyricTimeMs(line.audioTimeMs, profile) / 1_000,
+    ]),
   )
   const activeIndex = findActiveLyricLineIndex(
     textLines.map((_, index) => timingByLine.get(index)),
@@ -254,7 +260,10 @@ function taskbarLyricsSnapshot(snapshot: PlayerSnapshot, settings: Settings) {
   }
 }
 
-function withTaskbarLyrics(snapshot: PlayerSnapshot, settings: Settings): PlayerSnapshot {
+function withTaskbarLyrics(
+  snapshot: PlayerSnapshot,
+  settings: Settings,
+): PlayerSnapshot {
   return { ...snapshot, lyrics: taskbarLyricsSnapshot(snapshot, settings) }
 }
 const viewBoundsSchema = z.object({
@@ -298,6 +307,14 @@ let taskbarRegisteredShortcutCount = 0
 let taskbarShortcutEnabled: boolean | undefined
 let autoSyncShutdownComplete = false
 let autoSyncShutdownPromise: Promise<void> | null = null
+
+function refreshTaskbarLyrics() {
+  if (!lastSnapshot) return
+  const snapshot = withTaskbarLyrics(lastSnapshot, getStoredData().settings)
+  lastSnapshot = snapshot
+  miniWindow?.webContents.send(IPC.playerSnapshot, snapshot)
+  taskbarModeWindow?.webContents.send(IPC.playerSnapshot, snapshot)
+}
 let quitCleanupComplete = false
 const taskbarEdges = new Map<number, TaskbarEdge>()
 
@@ -1409,7 +1426,11 @@ function registerIpc() {
       currentTrackId: lastSnapshot?.currentTrack?.id,
       currentTrackPlaying: lastSnapshot?.isPlaying,
       stopCurrentTrack: async () => {
-        if (lastSnapshot?.isPlaying && mainWindow && !mainWindow.isDestroyed()) {
+        if (
+          lastSnapshot?.isPlaying &&
+          mainWindow &&
+          !mainWindow.isDestroyed()
+        ) {
           mainWindow.webContents.send(IPC.playerCommand, { type: 'toggle' })
           await new Promise((resolve) => setTimeout(resolve, 100))
         }
@@ -1607,7 +1628,11 @@ function registerIpc() {
   })
   const lyricsSyncProfileSchema = z.object({
     trackId: trackIdSchema,
-    offsetMs: z.number().finite(),
+    offsetMs: z
+      .number()
+      .int()
+      .min(-MAX_LYRICS_SYNC_OFFSET_MS)
+      .max(MAX_LYRICS_SYNC_OFFSET_MS),
     anchors: z
       .array(
         z.object({
@@ -1640,11 +1665,14 @@ function registerIpc() {
       autoSyncService?.getJob(parsed.trackId)?.status === 'completed'
     )
       await autoSyncService.assertResultCurrent(parsed.trackId)
-    return saveLyricsSyncProfile(parsed)
+    const saved = saveLyricsSyncProfile(parsed)
+    refreshTaskbarLyrics()
+    return saved
   })
   ipcMain.handle(IPC.lyricsSyncClear, (event, trackId: unknown) => {
     assertTrustedSender(event)
     clearLyricsSyncProfile(trackIdSchema.parse(trackId))
+    refreshTaskbarLyrics()
   })
   const generatedLyricsTimelineSchema = z.object({
     trackId: trackIdSchema,

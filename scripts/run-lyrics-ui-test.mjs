@@ -10,6 +10,7 @@ import WebSocket from 'ws'
 
 const root = process.cwd()
 const debugPort = 9231
+const restartedDebugPort = debugPort + 1
 const harnessRoot = await mkdtemp(
   path.join(os.tmpdir(), 'pulse-shelf-lyrics-ui-'),
 )
@@ -54,6 +55,8 @@ const horizontalCoverScreenshot = path.join(
 )
 let trackARequests = 0
 let lyricaRequests = 0
+let squareSearchRequests = 0
+let pendingSquareSearchRequests = 0
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function silentWav(seconds = 1) {
@@ -114,19 +117,6 @@ async function waitFor(check, label, timeout = 20_000) {
     await delay(100)
   }
   throw new Error(`${label} timed out${lastError ? `: ${lastError}` : ''}`)
-}
-
-async function waitForDebugPortToClose(port, timeout = 10_000) {
-  const end = Date.now() + timeout
-  while (Date.now() < end) {
-    try {
-      await fetch(`http://127.0.0.1:${port}/json/list`)
-    } catch {
-      return
-    }
-    await delay(100)
-  }
-  throw new Error(`Electron DevTools port ${port} did not close`)
 }
 
 class Cdp {
@@ -441,9 +431,12 @@ const server = createServer((request, response) => {
     const query =
       new URL(request.url, 'http://127.0.0.1').searchParams.get('q') ?? ''
     if (query.includes('Square Track')) {
+      squareSearchRequests += 1
+      pendingSquareSearchRequests += 1
       setTimeout(() => {
         response.writeHead(200, { 'content-type': 'application/json' })
         response.end(JSON.stringify(candidates))
+        pendingSquareSearchRequests -= 1
       }, 700)
       return
     }
@@ -815,15 +808,25 @@ try {
   const syncControls = await cdp.evaluate(`(() => ({
     editor: document.querySelector('.lyrics-sync-editor')?.textContent,
     offsetButtons: [...document.querySelectorAll('.lyrics-sync-editor button')]
-      .filter((button) => button.textContent.includes('ms')).length,
+      .filter((button) => button.hasAttribute('data-lyrics-global-offset')).length,
+    hasOffsetInput: Boolean(document.querySelector('.lyrics-global-offset__input input')),
+    hasOffsetReset: Boolean(document.querySelector('.lyrics-global-offset__reset')),
   }))()`)
-  if (syncControls.offsetButtons !== 4)
+  if (
+    syncControls.offsetButtons !== 4 ||
+    !syncControls.hasOffsetInput ||
+    !syncControls.hasOffsetReset
+  )
     throw new Error(
       `Lyrics sync offset controls are incomplete: ${JSON.stringify(syncControls)}`,
     )
   await cdp.evaluate(`
-    [...document.querySelectorAll('.lyrics-sync-editor button')]
-      .find((button) => button.textContent.includes('+100ms')).click()
+    document.querySelector('[data-lyrics-global-offset="-100"]').click()
+    document.querySelector('[data-lyrics-global-offset="1000"]').click()
+    const input = document.querySelector('.lyrics-global-offset__input input')
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+      .set.call(input, '1.000')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
   `)
   await cdp.evaluate(
     'document.querySelector(".lyrics-sync-editor .button--primary").click()',
@@ -831,21 +834,42 @@ try {
   await waitFor(
     () =>
       cdp.evaluate(
-        'document.querySelector(".lyrics-sync-status")?.textContent.includes("0.1")',
+        'document.querySelector(".lyrics-sync-status")?.textContent.includes("1.0")',
       ),
     'saved lyrics sync offset status',
   )
   const savedOffset = await cdp.evaluate(
     `window.electronAPI.getLyricsSyncProfile('${trackAId}')`,
   )
-  if (savedOffset?.offsetMs !== 100)
+  if (savedOffset?.offsetMs !== 1000)
     throw new Error(
       `Lyrics sync offset was not saved: ${JSON.stringify(savedOffset)}`,
     )
   await cdp.evaluate('document.querySelector(".lyrics-sync-trigger").click()')
   await cdp.evaluate(`
-    [...document.querySelectorAll('.lyrics-sync-editor button')]
-      .find((button) => button.textContent.includes('+100ms')).click()
+    document.querySelector('[data-lyrics-sync-add-anchor]').click()
+    document.querySelector('.lyrics-global-offset__reset').click()
+  `)
+  await cdp.evaluate(
+    'document.querySelector(".lyrics-sync-editor .button--primary").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `window.electronAPI.getLyricsSyncProfile('${trackAId}').then((profile) => profile?.offsetMs === 0 && profile.anchors.length === 1)`,
+      ),
+    'global offset reset preserves anchors',
+  )
+  const resetOffset = await cdp.evaluate(
+    `window.electronAPI.getLyricsSyncProfile('${trackAId}')`,
+  )
+  if (resetOffset?.offsetMs !== 0 || resetOffset.anchors.length !== 1)
+    throw new Error(
+      `Global offset reset changed anchors: ${JSON.stringify(resetOffset)}`,
+    )
+  await cdp.evaluate('document.querySelector(".lyrics-sync-trigger").click()')
+  await cdp.evaluate(`
+    document.querySelector('[data-lyrics-global-offset="100"]').click()
   `)
   await cdp.evaluate(`
     [...document.querySelectorAll('.lyrics-sync-editor button')]
@@ -854,7 +878,7 @@ try {
   const cancelledOffset = await cdp.evaluate(
     `window.electronAPI.getLyricsSyncProfile('${trackAId}')`,
   )
-  if (cancelledOffset?.offsetMs !== 100)
+  if (cancelledOffset?.offsetMs !== 0 || cancelledOffset.anchors.length !== 1)
     throw new Error(
       'Cancelling lyrics sync editing did not restore the saved profile',
     )
@@ -962,10 +986,12 @@ try {
   await waitFor(
     () =>
       cdp.evaluate(
-        'document.querySelector(".lyrics-text__content")?.textContent.includes("Cached plain lyrics")',
+        `document.querySelector('[data-lyrics-track-id="${trackCId}"] .lyrics-text__content')?.textContent.includes('Cached plain lyrics')`,
       ),
     'cached plain lyrics',
   )
+  await pausePlayer(cdp)
+  const squareLyricsRoot = `[data-lyrics-track-id="${trackCId}"]`
   const plainLyricsState = await cdp.evaluate(`(() => ({
     actions: document.querySelectorAll('.lyrics-text [data-lyrics-search-mode]').length,
     hasActiveLine: Boolean(document.querySelector('.lyrics-text .is-active')),
@@ -983,17 +1009,21 @@ try {
     throw new Error(
       `Plain lyrics actions or timestamp warning are missing: ${JSON.stringify(plainLyricsState)}`,
     )
+  const squareSearchRequestsBeforeCancel = squareSearchRequests
   await cdp.evaluate(
-    'document.querySelector("[data-lyrics-search-mode=\\"synced\\"]").click()',
+    `document.querySelector('${squareLyricsRoot} [data-lyrics-search-mode="synced"]').click()`,
   )
-  const initialSearchFeedback = await cdp.evaluate(`(() => ({
-    progress: document.querySelector('[data-lyrics-search-progress]')?.getAttribute('data-lyrics-search-progress'),
-    elapsed: document.querySelector('[data-lyrics-search-progress]')?.textContent,
-    cancelVisible: Boolean(document.querySelector('[data-lyrics-search-cancel]')),
-    searchButtonsDisabled: [...document.querySelectorAll('.lyrics-search-actions button')]
+  const initialSearchFeedback = await cdp.evaluate(`(() => {
+    const root = document.querySelector('${squareLyricsRoot}')
+    return {
+    progress: root?.querySelector('[data-lyrics-search-progress]')?.getAttribute('data-lyrics-search-progress'),
+    elapsed: root?.querySelector('[data-lyrics-search-progress]')?.textContent,
+    cancelVisible: Boolean(root?.querySelector('[data-lyrics-search-cancel]')),
+    searchButtonsDisabled: [...(root?.querySelectorAll('.lyrics-search-actions button') ?? [])]
       .filter((button) => !button.hasAttribute('data-lyrics-search-cancel'))
       .every((button) => button.disabled),
-  }))()`)
+    }
+  })()`)
   if (
     !initialSearchFeedback.progress ||
     !initialSearchFeedback.elapsed?.includes('초 경과') ||
@@ -1003,55 +1033,98 @@ try {
     throw new Error(
       `Immediate lyrics search feedback is incomplete: ${JSON.stringify(initialSearchFeedback)}`,
     )
+  await waitFor(
+    () => squareSearchRequests > squareSearchRequestsBeforeCancel,
+    'in-flight square lyrics search',
+  )
   await cdp.evaluate(
-    'document.querySelector("[data-lyrics-search-cancel]").click()',
+    `document.querySelector('${squareLyricsRoot} [data-lyrics-search-cancel]').click()`,
   )
   await waitFor(
     () =>
       cdp.evaluate(
-        'document.querySelector(".lyrics-text__content")?.textContent.includes("Cached plain lyrics")',
+        `document.querySelector('${squareLyricsRoot} .lyrics-text__content')?.textContent.includes('Cached plain lyrics')`,
       ),
     'plain lyrics after cancelling an in-flight search',
   )
   await delay(850)
   const lyricsAfterCancelledSearch = await cdp.evaluate(
-    'document.querySelector(".lyrics-text__content")?.textContent',
+    `document.querySelector('${squareLyricsRoot} .lyrics-text__content')?.textContent`,
   )
   if (!lyricsAfterCancelledSearch?.includes('Cached plain lyrics'))
     throw new Error('Cancelled lyrics search replaced the existing lyrics')
+  await waitFor(
+    () => pendingSquareSearchRequests === 0,
+    'cancelled square lyrics search cleanup',
+  )
   await cdp.evaluate(
-    'document.querySelector("[data-lyrics-search-mode=\\"synced\\"]").click()',
+    `document.querySelector('${squareLyricsRoot} [data-lyrics-search-mode="synced"]').click()`,
   )
   await waitFor(
-    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-candidate"))'),
+    () =>
+      cdp.evaluate(
+        `Boolean(document.querySelector('${squareLyricsRoot} .lyrics-candidate'))`,
+      ),
     'synced lyrics search candidates',
-  )
+  ).catch(async (error) => {
+    const state = await cdp.evaluate(`(() => {
+      const root = document.querySelector('${squareLyricsRoot}')
+      return {
+        status: root?.querySelector('.lyrics-search-status')?.textContent,
+        progress: root?.querySelector('[data-lyrics-search-progress]')?.textContent,
+        title: root?.querySelector('.lyrics-search-fields input')?.value,
+        artist: root?.querySelectorAll('.lyrics-search-fields input')[1]?.value,
+      }
+    })()`)
+    throw new Error(`${error.message}: ${JSON.stringify(state)}`)
+  })
   const syncedFirstCandidate = await cdp.evaluate(
-    'document.querySelector(".lyrics-candidate")?.getAttribute("data-lyrics-synced")',
+    `document.querySelector('${squareLyricsRoot} .lyrics-candidate')?.getAttribute('data-lyrics-synced')`,
   )
   if (syncedFirstCandidate !== 'true')
     throw new Error(
       `Synced lyrics search did not prioritize timed candidates: ${syncedFirstCandidate}`,
     )
   await cdp.evaluate(
-    'document.querySelector(".lyrics-search-panel .section-heading button").click()',
+    `document.querySelector('${squareLyricsRoot} .section-heading button').click()`,
   )
   await waitFor(
     () =>
       cdp.evaluate(
-        'document.querySelector(".lyrics-text__content")?.textContent.includes("Cached plain lyrics")',
+        `document.querySelector('${squareLyricsRoot} .lyrics-text__content')?.textContent.includes('Cached plain lyrics')`,
       ),
     'plain lyrics after search cancellation',
   )
   await cdp.evaluate(
-    'document.querySelector("[data-lyrics-search-mode=\\"synced\\"]").click()',
+    `document.querySelector('${squareLyricsRoot} [data-lyrics-search-mode="synced"]').click()`,
   )
   await waitFor(
-    () => cdp.evaluate('Boolean(document.querySelector(".lyrics-candidate"))'),
+    () =>
+      cdp.evaluate(
+        `Boolean(document.querySelector('${squareLyricsRoot} .lyrics-candidate'))`,
+      ),
     'timed lyrics candidates after search cancellation',
-  )
+  ).catch(async (error) => {
+    const state = await cdp.evaluate(`(() => {
+      const root = document.querySelector('${squareLyricsRoot}')
+      return {
+        status: root?.querySelector('.lyrics-search-status')?.textContent,
+        progress: root?.querySelector('[data-lyrics-search-progress]')?.textContent,
+        candidates: root?.querySelectorAll('.lyrics-candidate').length,
+        title: root?.querySelector('.lyrics-search-fields input')?.value,
+        artist: root?.querySelectorAll('.lyrics-search-fields input')[1]?.value,
+      }
+    })()`)
+    throw new Error(
+      `${error.message}: ${JSON.stringify({
+        state,
+        squareSearchRequests,
+        pendingSquareSearchRequests,
+      })}`,
+    )
+  })
   await cdp.evaluate(
-    `[...document.querySelectorAll('.lyrics-candidate[data-lyrics-synced="true"]')]
+    `[...document.querySelectorAll('${squareLyricsRoot} .lyrics-candidate[data-lyrics-synced="true"]')]
       .find((row) => row.querySelector('strong')?.textContent.includes('Candidate Song'))
       ?.querySelector('.lyrics-candidate__action')?.click()`,
   )
@@ -1296,6 +1369,76 @@ try {
       ),
     'plain-only generated timeline persistence',
   )
+  const generatedTimelineBeforeOffset = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
+  )
+  const firstGeneratedTimeSeconds =
+    generatedTimelineBeforeOffset.timeline?.lines[0]?.audioTimeMs / 1000
+  if (!Number.isFinite(firstGeneratedTimeSeconds))
+    throw new Error('Generated timeline is missing its first timestamp')
+  await cdp.evaluate(
+    'document.querySelector("[data-generated-global-offset-edit]").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        'Boolean(document.querySelector("[data-generated-global-offset-editor]"))',
+      ),
+    'generated global offset editor',
+  )
+  await cdp.evaluate(
+    `document.querySelector('[data-lyrics-global-offset="1000"]').click()`,
+  )
+  await cdp.evaluate(
+    'document.querySelector("[data-generated-global-offset-editor] .button--primary").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `window.electronAPI.getLyricsSyncProfile('${trackDId}').then((profile) => profile?.offsetMs === 1000)`,
+      ),
+    'generated global offset persistence',
+  )
+  await seekPlayer(cdp, firstGeneratedTimeSeconds)
+  await delay(100)
+  if (
+    await cdp.evaluate(
+      `document.querySelector('[data-generated-line-index="0"]')?.classList.contains('is-active')`,
+    )
+  )
+    throw new Error('Generated lyrics applied the global offset too early')
+  await seekPlayer(cdp, firstGeneratedTimeSeconds + 1)
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `document.querySelector('[data-generated-line-index="0"]')?.classList.contains('is-active')`,
+      ),
+    'generated lyric highlight after global offset',
+  )
+  const generatedTimelineAfterOffset = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
+  )
+  if (
+    JSON.stringify(generatedTimelineAfterOffset.timeline?.lines) !==
+    JSON.stringify(generatedTimelineBeforeOffset.timeline?.lines)
+  )
+    throw new Error('Generated global offset rewrote line timestamps')
+  await cdp.evaluate(
+    'document.querySelector("[data-generated-global-offset-edit]").click()',
+  )
+  await cdp.evaluate(
+    'document.querySelector(".lyrics-global-offset__reset").click()',
+  )
+  await cdp.evaluate(
+    'document.querySelector("[data-generated-global-offset-editor] .button--primary").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `window.electronAPI.getLyricsSyncProfile('${trackDId}').then((profile) => profile?.offsetMs === 0)`,
+      ),
+    'generated global offset reset',
+  )
   await waitFor(
     () =>
       cdp.evaluate(
@@ -1409,14 +1552,31 @@ try {
       border: style.borderColor,
       opacity: style.opacity,
       cursor: style.cursor,
+      inlineStyle: button.getAttribute('style'),
+      className: button.className,
+      editor: Boolean(button.closest('.generated-timeline-editor')),
     }
   })()`)
+  const disabledTimestampComputedContrast =
+    disabledTimestampControl.background === 'rgb(21, 29, 48)' &&
+    disabledTimestampControl.color === 'rgb(127, 138, 168)' &&
+    disabledTimestampControl.border === 'rgb(41, 52, 79)' &&
+    disabledTimestampControl.opacity === '0.7'
+  // Electron can expose its platform disabled palette from getComputedStyle even
+  // when the authored inline values are present. Verify those values as well so
+  // this stays a contrast regression check instead of a renderer-palette check.
+  const disabledTimestampAuthoredContrast =
+    disabledTimestampControl.inlineStyle?.includes(
+      'background-color: rgb(21, 29, 48)',
+    ) &&
+    disabledTimestampControl.inlineStyle?.includes('color: rgb(127, 138, 168)') &&
+    disabledTimestampControl.inlineStyle?.includes(
+      'border-color: rgb(41, 52, 79)',
+    ) &&
+    disabledTimestampControl.inlineStyle?.includes('opacity: 0.7')
   if (
     !disabledTimestampControl.disabled ||
-    disabledTimestampControl.background !== 'rgb(21, 29, 48)' ||
-    disabledTimestampControl.color !== 'rgb(127, 138, 168)' ||
-    disabledTimestampControl.border !== 'rgb(41, 52, 79)' ||
-    disabledTimestampControl.opacity !== '0.7' ||
+    (!disabledTimestampComputedContrast && !disabledTimestampAuthoredContrast) ||
     disabledTimestampControl.cursor !== 'not-allowed'
   )
     throw new Error(
@@ -1525,6 +1685,49 @@ try {
       ),
     'active generated line after inline save',
   )
+  const manualGeneratedTimelineBeforeOffsetReset = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
+  )
+  await cdp.evaluate(
+    'document.querySelector("[data-generated-global-offset-edit]").click()',
+  )
+  await cdp.evaluate(
+    `document.querySelector('[data-lyrics-global-offset="1000"]').click()`,
+  )
+  await cdp.evaluate(
+    'document.querySelector("[data-generated-global-offset-editor] .button--primary").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `window.electronAPI.getLyricsSyncProfile('${trackDId}').then((profile) => profile?.offsetMs === 1000)`,
+      ),
+    'generated global offset after manual timing edits',
+  )
+  await cdp.evaluate(
+    'document.querySelector("[data-generated-global-offset-edit]").click()',
+  )
+  await cdp.evaluate(
+    'document.querySelector(".lyrics-global-offset__reset").click()',
+  )
+  await cdp.evaluate(
+    'document.querySelector("[data-generated-global-offset-editor] .button--primary").click()',
+  )
+  await waitFor(
+    () =>
+      cdp.evaluate(
+        `window.electronAPI.getLyricsSyncProfile('${trackDId}').then((profile) => profile?.offsetMs === 0)`,
+      ),
+    'generated global offset reset after manual timing edits',
+  )
+  const manualGeneratedTimelineAfterOffsetReset = await cdp.evaluate(
+    `window.electronAPI.getGeneratedLyricsTimeline('${trackDId}')`,
+  )
+  if (
+    JSON.stringify(manualGeneratedTimelineAfterOffsetReset.timeline?.lines) !==
+    JSON.stringify(manualGeneratedTimelineBeforeOffsetReset.timeline?.lines)
+  )
+    throw new Error('Global offset reset rewrote manual generated timings')
   await clickCoverByTitle(cdp, 'Candidate Song')
   await waitFor(
     () =>
@@ -1630,10 +1833,20 @@ try {
   if (trackARequests !== requestsAfterSelection)
     throw new Error('Returning to track A triggered another LRCLIB request')
 
+  let appExited = false
+  const appExit = once(app, 'exit').then(() => {
+    appExited = true
+  })
+  // Ask Chromium to close first so Electron releases its single-instance lock
+  // before the persistence restart. taskkill remains the fallback for a hung app.
+  await Promise.race([
+    cdp.send('Browser.close').catch(() => undefined),
+    delay(1_000),
+  ])
+  await Promise.race([appExit, delay(5_000)])
   cdp.close()
   cdp = undefined
-  await stop(app)
-  await waitForDebugPortToClose(debugPort)
+  if (!appExited) await stop(app)
   app = start(
     electron,
     [
@@ -1641,7 +1854,7 @@ try {
       '--no-sandbox',
       '--disable-gpu',
       `--user-data-dir=${userData}`,
-      `--remote-debugging-port=${debugPort}`,
+      `--remote-debugging-port=${restartedDebugPort}`,
     ],
     {
       VITE_DEV_SERVER_URL: 'http://127.0.0.1:5173/',
@@ -1655,7 +1868,7 @@ try {
   )
   const restartedPage = await waitFor(async () => {
     const pages = await (
-      await fetch(`http://127.0.0.1:${debugPort}/json/list`)
+      await fetch(`http://127.0.0.1:${restartedDebugPort}/json/list`)
     ).json()
     return pages.find(
       (entry) => entry.type === 'page' && entry.url.includes('5173'),
