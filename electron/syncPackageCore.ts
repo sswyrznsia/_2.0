@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { defaultMediaImportAction } from '../src/types/syncImportDecisions'
 import type {
   PulseShelfSyncPackage,
   SyncConflictKind,
@@ -761,6 +762,11 @@ export function choiceForPreview(
   return {
     recordId: preview.recordId,
     localTrackId: preview.localTrackId,
+    mediaAction: defaultMediaImportAction(
+      preview.matchKind,
+      preview.mediaAvailable,
+    ),
+    existingFileAction: 'keep',
     conflicts: Object.fromEntries(
       preview.conflicts.map((conflict) => [
         conflict.kind,

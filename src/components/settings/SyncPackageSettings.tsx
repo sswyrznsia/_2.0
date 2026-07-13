@@ -11,6 +11,14 @@ import type {
   SyncPackageOperationResult,
   SyncImportValidationIssue,
 } from '../../types/models'
+import {
+  defaultMediaImportAction,
+  type SyncConflictImportAction,
+  type SyncExistingFileAction,
+  type SyncLikedImportAction,
+  type SyncMediaImportAction,
+  type SyncPlaylistImportAction,
+} from '../../types/syncImportDecisions'
 import './SyncPackageSettings.css'
 
 const DEFAULT_OPTIONS: SyncPackageExportOptions = {
@@ -21,6 +29,23 @@ const DEFAULT_OPTIONS: SyncPackageExportOptions = {
   mediaFiles: false,
 }
 
+function defaultChoiceForTrack(
+  track: SyncPackageInspection['tracks'][number],
+): SyncImportTrackChoice {
+  return {
+    recordId: track.recordId,
+    localTrackId: track.localTrackId,
+    mediaAction: defaultMediaImportAction(track.matchKind, track.mediaAvailable),
+    existingFileAction: 'keep',
+    conflicts: Object.fromEntries(
+      track.conflicts.map((conflict) => [
+        conflict.kind,
+        conflict.recommended,
+      ]),
+    ),
+  }
+}
+
 export function SyncPackageSettings() {
   const [options, setOptions] = useState(DEFAULT_OPTIONS)
   const [inspection, setInspection] = useState<SyncPackageInspection | null>(
@@ -29,10 +54,9 @@ export function SyncPackageSettings() {
   const [choices, setChoices] = useState<Record<string, SyncImportTrackChoice>>(
     {},
   )
-  const [likesMode, setLikesMode] = useState<'union' | 'replace'>('union')
-  const [playlistMode, setPlaylistMode] = useState<
-    'newer' | 'local' | 'imported'
-  >('newer')
+  const [likesMode, setLikesMode] = useState<SyncLikedImportAction>('union')
+  const [playlistMode, setPlaylistMode] =
+    useState<SyncPlaylistImportAction>('newer')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [estimate, setEstimate] = useState<SyncPackageEstimate | null>(null)
@@ -105,8 +129,8 @@ export function SyncPackageSettings() {
     if (!inspection) return null
     return {
       token: inspection.token,
-      tracks: inspection.tracks.map((track) =>
-        choices[track.recordId] ?? { recordId: track.recordId },
+      tracks: inspection.tracks.map(
+        (track) => choices[track.recordId] ?? defaultChoiceForTrack(track),
       ),
       likesMode,
       playlistMode,
@@ -117,7 +141,7 @@ export function SyncPackageSettings() {
     if (!inspection) return [] as SyncImportValidationIssue[]
     const issues: SyncImportValidationIssue[] = []
     for (const track of inspection.tracks) {
-      const choice = choices[track.recordId]
+      const choice = choices[track.recordId] ?? defaultChoiceForTrack(track)
       if (!choice?.mediaAction) {
         issues.push({
           recordId: track.recordId,
@@ -174,24 +198,7 @@ export function SyncPackageSettings() {
           Object.fromEntries(
             result.inspection.tracks.map((track) => [
               track.recordId,
-              {
-                recordId: track.recordId,
-                localTrackId: track.localTrackId,
-                mediaAction: track.mediaAvailable
-                  ? track.matchKind === 'exact'
-                    ? 'keep'
-                    : track.matchKind === 'missing'
-                      ? 'create'
-                      : 'skip'
-                  : 'skip',
-                existingFileAction: 'keep',
-                conflicts: Object.fromEntries(
-                  track.conflicts.map((conflict) => [
-                    conflict.kind,
-                    conflict.recommended,
-                  ]),
-                ),
-              } satisfies SyncImportTrackChoice,
+              defaultChoiceForTrack(track),
             ]),
           ),
         )
@@ -257,13 +264,17 @@ export function SyncPackageSettings() {
       [recordId]: {
         ...(current[recordId] ?? { recordId }),
         localTrackId: localTrackId || undefined,
-        mediaAction: localTrackId &&
-          inspection?.tracks.find((track) => track.recordId === recordId)
-            ?.mediaAvailable
-          ? current[recordId]?.mediaAction === 'replace'
+        mediaAction: (() => {
+          const track = inspection?.tracks.find(
+            (item) => item.recordId === recordId,
+          )
+          if (!track) return 'skip'
+          if (!localTrackId || !track.mediaAvailable)
+            return defaultMediaImportAction(track.matchKind, track.mediaAvailable)
+          return current[recordId]?.mediaAction === 'replace'
             ? 'replace'
             : 'keep'
-          : 'skip',
+        })(),
         conflicts: Object.fromEntries(
           (
             inspection?.tracks
@@ -278,7 +289,7 @@ export function SyncPackageSettings() {
 
   const chooseMediaAction = (
     recordId: string,
-    mediaAction: NonNullable<SyncImportTrackChoice['mediaAction']>,
+    mediaAction: SyncMediaImportAction,
   ) =>
     setChoices((current) => ({
       ...current,
@@ -295,7 +306,7 @@ export function SyncPackageSettings() {
   const chooseConflict = (
     recordId: string,
     kind: SyncConflictKind,
-    value: 'local' | 'imported',
+    value: SyncConflictImportAction,
   ) =>
     setChoices((current) => ({
       ...current,
@@ -490,7 +501,7 @@ export function SyncPackageSettings() {
               <select
                 value={likesMode}
                 onChange={(event) =>
-                  setLikesMode(event.target.value as 'union' | 'replace')
+                  setLikesMode(event.target.value as SyncLikedImportAction)
                 }
               >
                 <option value="union">현재 + 가져온 좋아요 합치기</option>
@@ -502,7 +513,7 @@ export function SyncPackageSettings() {
               <select
                 value={playlistMode}
                 onChange={(event) =>
-                  setPlaylistMode(event.target.value as typeof playlistMode)
+                  setPlaylistMode(event.target.value as SyncPlaylistImportAction)
                 }
               >
                 <option value="newer">더 최근 수정본</option>
@@ -544,9 +555,7 @@ export function SyncPackageSettings() {
                         onChange={(event) =>
                           chooseMediaAction(
                             track.recordId,
-                            event.target.value as NonNullable<
-                              SyncImportTrackChoice['mediaAction']
-                            >,
+                            event.target.value as SyncMediaImportAction,
                           )
                         }
                       >
@@ -576,8 +585,7 @@ export function SyncPackageSettings() {
                                 ...(current[track.recordId] ?? {
                                   recordId: track.recordId,
                                 }),
-                                existingFileAction: event.target.value as
-                                  'keep' | 'trash',
+                                existingFileAction: event.target.value as SyncExistingFileAction,
                               },
                             }))
                           }
@@ -617,7 +625,9 @@ export function SyncPackageSettings() {
                     </select>
                   </label>
                 )}
-                {track.matchKind === 'missing' && (
+                {track.matchKind === 'missing' &&
+                  (!track.mediaAvailable ||
+                    choices[track.recordId]?.mediaAction !== 'create') && (
                   <p>음악 파일을 만들지 않고 이 곡의 데이터는 건너뜁니다.</p>
                 )}
                 {(track.matchKind === 'possible'
@@ -643,7 +653,7 @@ export function SyncPackageSettings() {
                         chooseConflict(
                           track.recordId,
                           conflict.kind,
-                          event.target.value as 'local' | 'imported',
+                          event.target.value as SyncConflictImportAction,
                         )
                       }
                     >

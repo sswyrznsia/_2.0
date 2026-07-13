@@ -1,3 +1,11 @@
+import type {
+  SyncConflictImportAction,
+  SyncExistingFileAction,
+  SyncLikedImportAction,
+  SyncMediaImportAction,
+  SyncPlaylistImportAction,
+} from './syncImportDecisions'
+
 export type RepeatMode = 'off' | 'one' | 'all'
 export type PageId =
   'home' | 'library' | 'youtube' | 'liked' | 'playlists' | 'focus' | 'settings'
@@ -597,16 +605,16 @@ export interface SyncPackageInspectResult {
 export interface SyncImportTrackChoice {
   recordId: string
   localTrackId?: string
-  conflicts?: Partial<Record<SyncConflictKind, 'local' | 'imported'>>
-  mediaAction?: 'keep' | 'replace' | 'create' | 'skip'
-  existingFileAction?: 'keep' | 'trash'
+  conflicts?: Partial<Record<SyncConflictKind, SyncConflictImportAction>>
+  mediaAction?: SyncMediaImportAction
+  existingFileAction?: SyncExistingFileAction
 }
 
 export interface SyncPackageImportPlan {
   token: string
   tracks: SyncImportTrackChoice[]
-  likesMode: 'union' | 'replace'
-  playlistMode: 'newer' | 'local' | 'imported'
+  likesMode: SyncLikedImportAction
+  playlistMode: SyncPlaylistImportAction
 }
 
 export interface SyncPackageOperationResult {

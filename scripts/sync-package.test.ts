@@ -17,6 +17,7 @@ import {
 import {
   applySyncPackage,
   buildTrackIdentity,
+  choiceForPreview,
   inspectSyncPackage,
   SYNC_PACKAGE_MAX_BYTES,
   isSafeArchivePath,
@@ -29,7 +30,10 @@ import {
   openSyncArchive,
   writeSyncArchive,
 } from '../electron/syncArchive'
-import { validateImportPlan } from '../electron/ipc/syncPackage'
+import {
+  parseSyncImportPlan,
+  validateImportPlan,
+} from '../electron/ipc/syncPackage'
 
 const trackId = 'a'.repeat(64)
 const secondTrackId = 'b'.repeat(64)
@@ -305,6 +309,49 @@ assert.equal(
     .length,
   10,
 )
+assert.equal(
+  choiceForPreview(missingPreviews[0]).mediaAction,
+  'create',
+  'local-missing records with verified media default to a real create action',
+)
+assert.equal(
+  choiceForPreview({ ...missingPreviews[0], mediaAvailable: false }).mediaAction,
+  'skip',
+  'local-missing records without media default to skip',
+)
+const legacyWirePlan = parseSyncImportPlan({
+  ...reproductionPlan,
+  likesMode: 'merge',
+  playlistMode: 'latest',
+  tracks: reproductionPlan.tracks.map((choice) => ({
+    ...choice,
+    mediaAction:
+      choice.mediaAction === 'create' ? 'create-new' : choice.mediaAction,
+    conflicts: choice.conflicts
+      ? Object.fromEntries(
+          Object.entries(choice.conflicts).map(([kind, action]) => [
+            kind,
+            action === 'local' ? 'keep-current' : 'use-imported',
+          ]),
+        )
+      : undefined,
+  })),
+})
+assert.equal(legacyWirePlan.result.success, true)
+if (legacyWirePlan.result.success) {
+  assert.equal(legacyWirePlan.result.data.likesMode, 'union')
+  assert.equal(legacyWirePlan.result.data.playlistMode, 'newer')
+  assert.equal(legacyWirePlan.result.data.tracks[1].mediaAction, 'create')
+}
+const invalidWirePlan = parseSyncImportPlan({
+  ...reproductionPlan,
+  tracks: [{ ...reproductionPlan.tracks[0], mediaAction: 'not-an-action' }],
+})
+assert.equal(
+  invalidWirePlan.result.success,
+  false,
+  'unknown action strings must remain rejected by the strict IPC schema',
+)
 const merged = applySyncPackage(local, incoming, mergeInspection, plan)
 assert.equal(merged.data.tracks[0].liked, true, 'likes should union by default')
 assert.equal(
@@ -315,6 +362,28 @@ assert.equal(
 assert.equal(merged.data.generatedLyricsTimelines[trackId].source, 'manual')
 assert.deepEqual(merged.data.playlists[0].trackIds, [trackId])
 assert.equal(merged.data.playlists[0].syncId, incoming.playlists[0].syncId)
+const importedConflict = applySyncPackage(
+  local,
+  incoming,
+  mergeInspection,
+  {
+    ...explicitConflictPlan,
+    tracks: [
+      {
+        ...explicitConflictPlan.tracks[0],
+        conflicts: {
+          ...explicitConflictPlan.tracks[0].conflicts,
+          lyrics: 'imported',
+        },
+      },
+    ],
+  },
+)
+assert.equal(
+  importedConflict.data.lyrics[trackId].plainLyrics,
+  'automatic',
+  'an exact-match conflict applies the selected imported value',
+)
 
 const repeatedInspection = inspectSyncPackage(
   incoming,

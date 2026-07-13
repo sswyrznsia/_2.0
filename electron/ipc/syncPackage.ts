@@ -13,6 +13,14 @@ import {
 import path from 'node:path'
 import { app, dialog, shell } from 'electron'
 import { z } from 'zod'
+import {
+  CONFLICT_IMPORT_ACTIONS,
+  EXISTING_FILE_ACTIONS,
+  LIKED_IMPORT_ACTIONS,
+  MEDIA_IMPORT_ACTIONS,
+  normalizeSyncImportPlanInput,
+  PLAYLIST_IMPORT_ACTIONS,
+} from '../../src/types/syncImportDecisions'
 import type {
   AppData,
   PulseShelfSyncPackage,
@@ -106,23 +114,23 @@ const importPlanSchema = z
             .regex(/^[a-f0-9]{64}$/)
             .optional(),
           conflicts: z
-            .record(
+            .partialRecord(
               z.enum([
                 'lyrics',
                 'lyricsSyncProfile',
                 'generatedLyricsTimeline',
                 'metadata',
               ]),
-              z.enum(['local', 'imported']),
+              z.enum(CONFLICT_IMPORT_ACTIONS),
             )
             .optional(),
-          mediaAction: z.enum(['keep', 'replace', 'create', 'skip']).optional(),
-          existingFileAction: z.enum(['keep', 'trash']).optional(),
+          mediaAction: z.enum(MEDIA_IMPORT_ACTIONS).optional(),
+          existingFileAction: z.enum(EXISTING_FILE_ACTIONS).optional(),
         })
         .strict(),
     ),
-    likesMode: z.enum(['union', 'replace']),
-    playlistMode: z.enum(['newer', 'local', 'imported']),
+    likesMode: z.enum(LIKED_IMPORT_ACTIONS),
+    playlistMode: z.enum(PLAYLIST_IMPORT_ACTIONS),
   })
   .strict()
   .superRefine((value, context) => {
@@ -159,6 +167,14 @@ interface PendingInspection {
 interface ValidatedImportPlan {
   plan?: SyncPackageImportPlan
   issues: SyncImportValidationIssue[]
+}
+
+export function parseSyncImportPlan(value: unknown) {
+  const normalizedValue = normalizeSyncImportPlanInput(value)
+  return {
+    normalizedValue,
+    result: importPlanSchema.safeParse(normalizedValue),
+  }
 }
 
 export interface SyncImportRuntimeContext {
@@ -380,14 +396,15 @@ export class SyncPackageService {
     runtime: SyncImportRuntimeContext = {},
   ): Promise<SyncPackageOperationResult> {
     this.logImportPayload(value)
-    const plan = importPlanSchema.safeParse(value)
+    const { normalizedValue, result: plan } = parseSyncImportPlan(value)
     if (!plan.success) {
       const issues = plan.error.issues.map((issue) => ({
-        recordId: recordIdAtPath(value, issue.path),
+        recordId: recordIdAtPath(normalizedValue, issue.path),
         field: issue.path.join('.') || 'plan',
-        message: '가져오기 선택 값이 허용된 형식이 아닙니다.',
+        message: schemaIssueMessage(issue.path),
         value: schemaIssueValue(issue),
       }))
+      logSchemaValidation(plan.error.issues, normalizedValue)
       this.logImportValidation('schema-rejected', undefined, issues)
       return invalidPlan(issues)
     }
@@ -1303,6 +1320,64 @@ function recordIdAtPath(value: unknown, pathParts: PropertyKey[]): string | unde
 function schemaIssueValue(issue: { code: string; input?: unknown }): string {
   if (typeof issue.input === 'string') return issue.input.slice(0, 80)
   return issue.code
+}
+
+function expectedImportValues(pathParts: PropertyKey[]): readonly string[] | undefined {
+  if (pathParts.includes('conflicts')) return CONFLICT_IMPORT_ACTIONS
+  switch (pathParts[pathParts.length - 1]) {
+    case 'mediaAction':
+      return MEDIA_IMPORT_ACTIONS
+    case 'existingFileAction':
+      return EXISTING_FILE_ACTIONS
+    case 'likesMode':
+      return LIKED_IMPORT_ACTIONS
+    case 'playlistMode':
+      return PLAYLIST_IMPORT_ACTIONS
+    default:
+      return undefined
+  }
+}
+
+function schemaIssueMessage(pathParts: PropertyKey[]): string {
+  if (pathParts.includes('conflicts'))
+    return '이 곡의 충돌 처리 방식을 다시 선택해주세요.'
+  switch (pathParts[pathParts.length - 1]) {
+    case 'mediaAction':
+      return '이 곡의 미디어 처리 방식을 다시 선택해주세요.'
+    case 'existingFileAction':
+      return '기존 파일 처리 방식을 다시 선택해주세요.'
+    case 'likesMode':
+      return '좋아요 가져오기 방식을 다시 선택해주세요.'
+    case 'playlistMode':
+      return '재생목록 가져오기 방식을 다시 선택해주세요.'
+    default:
+      return '가져오기 선택값이 허용된 형식이 아닙니다.'
+  }
+}
+
+function logSchemaValidation(
+  schemaIssues: ReadonlyArray<{
+    code: string
+    path: PropertyKey[]
+    input?: unknown
+  }>,
+  value: unknown,
+) {
+  if (!isDevelopmentTraceEnabled()) return
+  const previewId =
+    value && typeof value === 'object' && typeof (value as { token?: unknown }).token === 'string'
+      ? (value as { token: string }).token
+      : ''
+  console.debug('[sync-package] import schema validation', {
+    previewId,
+    rejected: schemaIssues.map((issue) => ({
+      recordId: recordIdAtPath(value, issue.path),
+      field: issue.path.join('.'),
+      code: issue.code,
+      expected: expectedImportValues(issue.path),
+      received: schemaIssueValue(issue),
+    })),
+  })
 }
 
 function isDevelopmentTraceEnabled(): boolean {
