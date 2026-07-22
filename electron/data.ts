@@ -44,7 +44,7 @@ export const createDefaultData = (): StoredAppData => ({
   lyricsSyncProfiles: {},
   generatedLyricsTimelines: {},
   settings: {
-    theme: 'dark',
+    theme: 'light',
     restoreLastPage: true,
     restoreQueue: true,
     autoplay: false,
@@ -57,7 +57,7 @@ export const createDefaultData = (): StoredAppData => ({
     autoFetchLyricsOnPlay: true,
     preferSyncedLyrics: true,
     lyricsAutoMatchThreshold: 0.9,
-    taskbarModeEnabled: false,
+    taskbarPlayerPlacement: 'disabled',
     taskbarModeShowOnStartup: true,
     taskbarModeRestoreLastState: true,
     taskbarTogglePosition: 'right',
@@ -67,6 +67,10 @@ export const createDefaultData = (): StoredAppData => ({
     taskbarModeOpacity: 1,
     taskbarLyricsEnabled: true,
     taskbarLyricsDisplay: 'current-next',
+    taskbarLyricsPosition: 'auto',
+    taskbarLyricsAlignment: 'center',
+    taskbarLyricsBackgroundMode: 'panel',
+    taskbarLyricsCustomOffset: null,
   },
   lastPage: 'home',
   playerSession: {
@@ -133,7 +137,7 @@ export const settingsSchema = z.object({
   autoFetchLyricsOnPlay: z.boolean(),
   preferSyncedLyrics: z.boolean(),
   lyricsAutoMatchThreshold: z.number().min(0).max(1),
-  taskbarModeEnabled: z.boolean(),
+  taskbarPlayerPlacement: z.enum(['above', 'taskbar-overlay', 'disabled']),
   taskbarModeShowOnStartup: z.boolean(),
   taskbarModeRestoreLastState: z.boolean(),
   taskbarTogglePosition: z.enum(['left', 'custom', 'right']),
@@ -143,6 +147,15 @@ export const settingsSchema = z.object({
   taskbarModeOpacity: z.number().min(0.85).max(1),
   taskbarLyricsEnabled: z.boolean(),
   taskbarLyricsDisplay: z.enum(['off', 'current', 'current-next']),
+  taskbarLyricsPosition: z.enum(['auto', 'above-player', 'below-player']),
+  taskbarLyricsAlignment: z.enum(['left', 'center', 'right']),
+  taskbarLyricsBackgroundMode: z.enum(['panel', 'transparent']),
+  taskbarLyricsCustomOffset: z
+    .object({
+      x: z.number().int().min(-100_000).max(100_000),
+      y: z.number().int().min(-100_000).max(100_000),
+    })
+    .nullable(),
 })
 
 export const appDataSchema = z.object({
@@ -373,6 +386,21 @@ function backupInvalidStore(storePath: string) {
   }
 }
 
+function migratedTaskbarPlayerPlacement(
+  settings: Record<string, unknown>,
+): 'above' | 'taskbar-overlay' | 'disabled' {
+  const placement = settings.taskbarPlayerPlacement
+  if (
+    placement === 'above' ||
+    placement === 'taskbar-overlay' ||
+    placement === 'disabled'
+  )
+    return placement
+  const oldEnabled =
+    settings.taskbarModeEnabled ?? settings.taskbarPlayerEnabled
+  return oldEnabled === true ? 'above' : 'disabled'
+}
+
 function migrateData(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value
   let old = value as Record<string, unknown>
@@ -382,10 +410,7 @@ function migrateData(value: unknown): unknown {
     const settings: Record<string, unknown> = {
       ...defaults.settings,
       ...oldSettings,
-      taskbarModeEnabled:
-        oldSettings.taskbarModeEnabled ??
-        oldSettings.taskbarPlayerEnabled ??
-        defaults.settings.taskbarModeEnabled,
+      taskbarPlayerPlacement: migratedTaskbarPlayerPlacement(oldSettings),
       taskbarModeShowOnStartup:
         oldSettings.taskbarModeShowOnStartup ??
         oldSettings.taskbarPlayerShowOnStartup ??
@@ -410,12 +435,19 @@ function migrateData(value: unknown): unknown {
         defaults.settings.taskbarModeShortcuts,
       taskbarModeOpacity: oldSettings.taskbarModeOpacity ?? 1,
       taskbarLyricsEnabled: oldSettings.taskbarLyricsEnabled ?? true,
-      taskbarLyricsDisplay: oldSettings.taskbarLyricsDisplay ?? 'current-next',
+      taskbarLyricsDisplay:
+        oldSettings.taskbarLyricsDisplay ?? 'current-next',
+      taskbarLyricsPosition: oldSettings.taskbarLyricsPosition ?? 'auto',
+      taskbarLyricsAlignment: oldSettings.taskbarLyricsAlignment ?? 'center',
+      taskbarLyricsBackgroundMode:
+        oldSettings.taskbarLyricsBackgroundMode ?? 'panel',
+      taskbarLyricsCustomOffset:
+        oldSettings.taskbarLyricsCustomOffset ?? null,
     }
     if (settings.taskbarTogglePosition === 'center')
       settings.taskbarTogglePosition = 'custom'
-    for (const key of Object.keys(settings))
-      if (key.startsWith('taskbarPlayer')) delete settings[key]
+    delete settings.taskbarModeEnabled
+    delete settings.taskbarPlayerEnabled
     return {
       ...defaults,
       ...old,
@@ -425,13 +457,18 @@ function migrateData(value: unknown): unknown {
     }
   }
   if (old.version === 3) {
+    const oldSettings = (old.settings ?? {}) as Record<string, unknown>
     return {
       ...defaults,
       ...old,
       version: 4,
       lyrics: old.lyrics ?? {},
       libraryExclusions: [],
-      settings: { ...defaults.settings, ...(old.settings as object) },
+      settings: {
+        ...defaults.settings,
+        ...oldSettings,
+        taskbarPlayerPlacement: migratedTaskbarPlayerPlacement(oldSettings),
+      },
     }
   }
   if (old.version === 2) {
@@ -441,7 +478,11 @@ function migrateData(value: unknown): unknown {
       version: 4,
       lyrics: old.lyrics ?? {},
       libraryExclusions: [],
-      settings: { ...defaults.settings, ...settings },
+      settings: {
+        ...defaults.settings,
+        ...settings,
+        taskbarPlayerPlacement: migratedTaskbarPlayerPlacement(settings),
+      },
     }
   }
   if (old.version !== 1) return value
@@ -490,7 +531,11 @@ function migrateData(value: unknown): unknown {
     version: 4,
     tracks,
     libraryExclusions: [],
-    settings: { ...defaults.settings, ...oldSettings },
+    settings: {
+      ...defaults.settings,
+      ...oldSettings,
+      taskbarPlayerPlacement: migratedTaskbarPlayerPlacement(oldSettings),
+    },
     playerSession: { ...defaults.playerSession, ...oldSession },
     focus: { ...defaults.focus, ...oldFocus, timer: defaults.focus.timer },
     onboardingCompleted: (old.musicFolders as unknown[])?.length > 0,

@@ -131,6 +131,14 @@ export default function App() {
 
   useEffect(
     () =>
+      window.electronAPI.onTaskbarLyricsSettingsChanged((patch) =>
+        useAppStore.getState().syncExternalSettings(patch),
+      ),
+    [],
+  )
+
+  useEffect(
+    () =>
       window.electronAPI.onOpenMainQueue(() => {
         useAppStore.getState().setNowPlayingOpen(true)
         window.dispatchEvent(

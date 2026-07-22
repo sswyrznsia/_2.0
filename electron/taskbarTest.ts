@@ -3,17 +3,31 @@ import {
   computeTaskbarToggleBounds,
   computeTaskbarRect,
 } from './taskbarGeometry'
+import { runTaskbarPlacementMigrationTests } from './dataMigration.test'
+import { runTaskbarOverlayPositionerTests } from './windows/taskbarOverlayPositioner.test'
+import { runTaskbarLyricsBoundsTests } from './windows/taskbarLyricsWindow.test'
+import { runTaskbarLyricsTransitionTests } from './taskbarLyricsTransition.test'
 
 function assertSafeWindow(window: BrowserWindow) {
+  const state = {
+    visible: window.isVisible(),
+    resizable: window.isResizable(),
+    minimizable: window.isMinimizable(),
+    maximizable: window.isMaximizable(),
+    fullscreenable: window.isFullScreenable(),
+    alwaysOnTop: window.isAlwaysOnTop(),
+  }
   if (
-    window.isVisible() ||
-    window.isResizable() ||
-    window.isMinimizable() ||
-    window.isMaximizable() ||
-    window.isFullScreenable() ||
-    !window.isAlwaysOnTop()
+    state.visible ||
+    state.resizable ||
+    state.minimizable ||
+    state.maximizable ||
+    state.fullscreenable ||
+    !state.alwaysOnTop
   )
-    throw new Error('Taskbar BrowserWindow safety options were not applied')
+    throw new Error(
+      `Taskbar BrowserWindow safety options were not applied: ${JSON.stringify(state)}`,
+    )
 }
 
 async function inspectWindow(bounds: Rectangle, title: string) {
@@ -32,7 +46,7 @@ async function inspectWindow(bounds: Rectangle, title: string) {
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
-    backgroundColor: '#0B1020',
+    backgroundColor: '#0C1A2C',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -41,6 +55,7 @@ async function inspectWindow(bounds: Rectangle, title: string) {
   })
   try {
     await window.loadURL('about:blank')
+    window.setAlwaysOnTop(true, 'pop-up-menu')
     window.setBounds(bounds, false)
     if (process.platform !== 'darwin')
       window.setShape([
@@ -66,6 +81,10 @@ async function inspectWindow(bounds: Rectangle, title: string) {
 }
 
 export async function runTaskbarDisplayTest() {
+  runTaskbarOverlayPositionerTests()
+  runTaskbarLyricsBoundsTests()
+  runTaskbarPlacementMigrationTests()
+  runTaskbarLyricsTransitionTests()
   const rawExpectedScale = process.env.PULSE_SHELF_TASKBAR_EXPECTED_SCALE
   const expectedScale = rawExpectedScale ? Number(rawExpectedScale) : undefined
   const displays = screen.getAllDisplays()

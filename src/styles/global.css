@@ -2,38 +2,64 @@
   font-family:
     'Pretendard Variable', Pretendard, 'Noto Sans KR', 'Malgun Gothic',
     sans-serif;
-  color: #eaf0ff;
-  background: #0b1020;
+  color: #e8f5ff;
+  background: #0c1a2c;
   font-synthesis: none;
-  --bg: #0b1020;
-  --sidebar: #090e1b;
-  --panel: #131a2e;
-  --panel-2: #171f35;
-  --surface: #1b253d;
-  --border: #263550;
-  --accent: #4d7cff;
-  --accent-strong: #6f94ff;
-  --text: #eaf0ff;
-  --muted: #a6b2d1;
+  --bg: #0c1a2c;
+  --sidebar: rgba(9, 22, 39, 0.78);
+  --panel: #12273f;
+  --panel-2: #16304e;
+  --surface: #1c3a5c;
+  --border: #2a4f77;
+  --accent: #1e9bff;
+  --accent-strong: #6cc8ff;
+  --text: #e8f5ff;
+  --muted: #92b6d5;
   --danger: #ff6577;
+  --scrim: rgba(3, 10, 20, 0.74);
+  --app-gradient:
+    radial-gradient(
+      1100px 460px at 80% -80px,
+      rgba(58, 140, 210, 0.2),
+      transparent 70%
+    ),
+    radial-gradient(
+      900px 400px at 10% 110%,
+      rgba(40, 110, 180, 0.16),
+      transparent 70%
+    ),
+    linear-gradient(180deg, #102640 0%, #0c1a2c 55%, #0a1626 100%);
   --player-height: 108px;
   --now-panel-cover-fit: contain;
 }
 
 :root[data-theme='light'] {
-  color: #182033;
-  background: #eef1f7;
-  --bg: #eef1f7;
-  --sidebar: #f7f8fb;
+  color: #22456b;
+  background: #d8eefd;
+  --bg: #d8eefd;
+  --sidebar: rgba(255, 255, 255, 0.58);
   --panel: #ffffff;
-  --panel-2: #f5f7fb;
-  --surface: #e7ebf3;
-  --border: #d2d8e5;
-  --accent: #315fd8;
-  --accent-strong: #244db8;
-  --text: #182033;
-  --muted: #5f6d8c;
-  --danger: #c43f50;
+  --panel-2: #f1f9ff;
+  --surface: #e0f1fd;
+  --border: #b5d9f0;
+  --accent: #1289fa;
+  --accent-strong: #0a6ede;
+  --text: #22456b;
+  --muted: #5c7fa3;
+  --danger: #e14e66;
+  --scrim: rgba(18, 56, 100, 0.42);
+  --app-gradient:
+    radial-gradient(
+      1100px 460px at 80% -80px,
+      rgba(255, 255, 255, 0.9),
+      transparent 70%
+    ),
+    radial-gradient(
+      900px 420px at 8% 112%,
+      rgba(255, 255, 255, 0.6),
+      transparent 70%
+    ),
+    linear-gradient(180deg, #9ed6f8 0%, #c6e6fb 55%, #daeffd 100%);
 }
 
 * {
@@ -54,15 +80,29 @@ body {
   color: var(--text);
 }
 html[data-window='taskbar-mode'] body,
-html[data-window='taskbar-toggle'] body {
+html[data-window='taskbar-toggle'] body,
+html[data-window='taskbar-lyrics'] body {
   min-width: 0;
   min-height: 0;
   user-select: none;
 }
+html[data-window='taskbar-mode'],
+html[data-window='taskbar-mode'] body,
+html[data-window='taskbar-mode'] #root,
+html[data-window='taskbar-lyrics'],
+html[data-window='taskbar-lyrics'] body,
+html[data-window='taskbar-lyrics'] #root {
+  background: transparent;
+}
+html[data-window='taskbar-mode'],
+html[data-window='taskbar-mode'] body,
+html[data-window='taskbar-mode'] #root {
+  background: transparent;
+}
 html[data-window='taskbar-toggle'],
 html[data-window='taskbar-toggle'] body,
 html[data-window='taskbar-toggle'] #root {
-  background: #0b1020;
+  background: var(--bg);
 }
 button,
 input,
@@ -118,13 +158,13 @@ svg {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #35435f;
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
   border: 3px solid transparent;
   background-clip: padding-box;
   border-radius: 10px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #52617e;
+  background-color: color-mix(in srgb, var(--muted) 65%, transparent);
 }
 
 .app-shell {
@@ -133,7 +173,8 @@ svg {
   height: 100%;
   grid-template-columns: 220px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) var(--player-height);
-  background: var(--bg);
+  background: var(--app-gradient);
+  background-attachment: fixed;
 }
 .app-shell.with-now-panel {
   grid-template-columns: 220px minmax(0, 1fr) 360px;
@@ -146,6 +187,7 @@ svg {
   padding: 24px 14px 16px;
   border-right: 1px solid var(--border);
   background: var(--sidebar);
+  backdrop-filter: blur(14px);
 }
 .brand {
   display: flex;
@@ -218,7 +260,7 @@ svg {
   min-height: 0;
   overflow: auto;
   position: relative;
-  background: var(--bg);
+  background: transparent;
 }
 .page {
   width: 100%;
@@ -262,15 +304,17 @@ svg {
 }
 .button:hover:not(:disabled) {
   background: var(--surface);
-  border-color: #3a4c70;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 .button--primary {
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .button--primary:hover:not(:disabled) {
   background: var(--accent-strong);
+  border-color: var(--accent-strong);
 }
 .button--danger {
   color: #fff;
@@ -300,12 +344,13 @@ svg {
   width: 42px;
   height: 42px;
   border-radius: 50%;
-  color: #0b1020;
-  background: var(--text);
+  color: #fff;
+  background: var(--accent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 .play-button:hover:not(:disabled) {
-  color: #0b1020;
-  background: #fff;
+  color: #fff;
+  background: var(--accent-strong);
 }
 
 .home-page {
@@ -393,8 +438,8 @@ svg {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  color: #0b1020;
-  background: #fff;
+  color: #fff;
+  background: var(--accent);
   opacity: 0;
   translate: -50% -50%;
   transition: opacity 140ms ease;
@@ -443,7 +488,7 @@ svg {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #7180a3;
+  color: var(--muted);
 }
 .album-cover--empty svg {
   width: 34%;
@@ -589,7 +634,7 @@ svg {
   width: 30px;
   height: 30px;
   margin-bottom: 13px;
-  color: #7787ad;
+  color: var(--muted);
 }
 .empty-state h3 {
   color: var(--text);
@@ -1136,7 +1181,8 @@ svg {
   padding: 22px 20px;
   overflow: auto;
   border-left: 1px solid var(--border);
-  background: var(--panel);
+  background: var(--sidebar);
+  backdrop-filter: blur(14px);
 }
 .now-panel.is-open {
   display: block;
@@ -1452,7 +1498,7 @@ svg {
   border-color: var(--accent);
 }
 .manual-lyrics-input__error {
-  color: #dba4af !important;
+  color: var(--danger) !important;
 }
 .lyrics-candidate-list {
   display: grid;
@@ -1836,7 +1882,7 @@ svg {
   line-height: 1.45;
 }
 .lyrics-auto-sync__availability.is-unavailable {
-  color: #d08b99;
+  color: color-mix(in srgb, var(--danger) 75%, var(--text));
 }
 .lyrics-auto-sync-card {
   display: grid;
@@ -1851,9 +1897,9 @@ svg {
   line-height: 1.45;
 }
 .lyrics-auto-sync-card--error {
-  border-color: color-mix(in srgb, #d9536b 48%, var(--border));
-  background: color-mix(in srgb, #d9536b 7%, var(--panel-2));
-  color: #dba4af;
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--border));
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel-2));
+  color: color-mix(in srgb, var(--danger) 60%, var(--text));
 }
 .lyrics-auto-sync-card--error strong {
   color: var(--text);
@@ -1935,7 +1981,7 @@ svg {
 .lyrics-auto-sync-quality-warning {
   border: 1px solid color-mix(in srgb, #d9a441 45%, var(--border));
   background: color-mix(in srgb, #d9a441 8%, transparent);
-  color: #d8b56f;
+  color: color-mix(in srgb, #b17c1d 62%, var(--text));
 }
 .lyrics-auto-sync-low-confidence {
   min-width: 0;
@@ -1968,6 +2014,7 @@ svg {
   padding: 12px 22px;
   border-top: 1px solid var(--border);
   background: var(--sidebar);
+  backdrop-filter: blur(14px);
 }
 .player-track {
   display: grid;
@@ -2260,16 +2307,16 @@ input[type='range'] {
   width: 38px;
   height: 21px;
   padding: 2px;
-  border: 1px solid #4a5875;
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: #303b55;
+  background: var(--surface);
 }
 .switch::after {
   display: block;
   width: 15px;
   height: 15px;
   border-radius: 50%;
-  background: #c4cce0;
+  background: color-mix(in srgb, var(--muted) 75%, #fff);
   content: '';
   transition: margin 140ms ease;
 }
@@ -2379,7 +2426,7 @@ kbd {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(2, 5, 13, 0.72);
+  background: var(--scrim);
 }
 .modal {
   width: min(430px, 100%);
@@ -2521,10 +2568,10 @@ kbd {
   min-width: 320px;
   max-width: 560px;
   padding: 9px 10px 9px 14px;
-  border: 1px solid #7e3e4a;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--border));
   border-radius: 8px;
-  background: #331922;
-  color: #ffdce2;
+  background: color-mix(in srgb, var(--danger) 14%, var(--panel));
+  color: var(--text);
   transform: translateX(-50%);
 }
 .toast span {
@@ -2586,7 +2633,7 @@ kbd {
   align-items: center;
   justify-content: center;
   padding: 30px;
-  background: rgba(3, 7, 16, 0.88);
+  background: var(--scrim);
 }
 .onboarding {
   width: min(580px, 100%);
@@ -2690,7 +2737,7 @@ kbd {
   width: 100%;
   height: 100%;
   padding: 10px 13px;
-  background: var(--bg);
+  background: var(--app-gradient);
 }
 .mini-player__top {
   display: flex;
@@ -2763,9 +2810,9 @@ kbd {
   align-items: center;
   gap: 14px;
   padding: 3px 10px;
-  border-top: 1px solid #263550;
-  background: #0b1020;
-  color: #eaf0ff;
+  border-top: 1px solid var(--border);
+  background: var(--app-gradient);
+  color: var(--text);
 }
 .taskbar-mode__track,
 .taskbar-mode__tools,
@@ -2786,7 +2833,7 @@ kbd {
   gap: 6px;
   padding: 0 8px 0 4px;
   border: 0;
-  border-right: 1px solid #263550;
+  border-right: 1px solid var(--border);
   background: transparent;
   font-size: 12px;
   font-weight: 700;
@@ -2862,11 +2909,11 @@ kbd {
   white-space: nowrap;
 }
 .taskbar-mode__lyrics strong {
-  color: #ffffff;
+  color: var(--text);
   font-size: 16px;
   font-weight: 700;
   line-height: 19px;
-  text-shadow: 0 1px 8px rgba(120, 162, 255, 0.22);
+  text-shadow: 0 1px 8px color-mix(in srgb, var(--accent-strong) 28%, transparent);
   animation: taskbar-lyrics-fade 180ms ease-out;
 }
 .taskbar-mode__lyrics span {
@@ -2926,6 +2973,357 @@ kbd {
   margin-left: 4px;
   color: var(--muted);
 }
+.taskbar-lyrics-window {
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  background: transparent;
+  color: var(--text);
+  pointer-events: none;
+  text-align: center;
+  user-select: none;
+}
+.taskbar-lyrics-panel {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  box-shadow: 0 8px 24px rgba(2, 9, 18, 0.22);
+}
+.taskbar-lyrics-panel__content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 7px 18px;
+}
+.taskbar-lyrics-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.taskbar-lyrics-line {
+  --lyric-from-y: 0px;
+  --lyric-to-y: 0px;
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  opacity: var(--lyric-from-opacity);
+  transform: translateY(calc(-50% + var(--lyric-from-y)));
+  text-overflow: ellipsis;
+}
+.taskbar-lyrics-line[data-from-slot='-2'] {
+  --lyric-from-y: -52px;
+}
+.taskbar-lyrics-line[data-from-slot='-1'] {
+  --lyric-from-y: -26px;
+}
+.taskbar-lyrics-line[data-from-slot='1'] {
+  --lyric-from-y: 26px;
+}
+.taskbar-lyrics-line[data-from-slot='2'] {
+  --lyric-from-y: 52px;
+}
+.taskbar-lyrics-line[data-to-slot='-2'] {
+  --lyric-to-y: -52px;
+}
+.taskbar-lyrics-line[data-to-slot='-1'] {
+  --lyric-to-y: -26px;
+}
+.taskbar-lyrics-line[data-to-slot='1'] {
+  --lyric-to-y: 26px;
+}
+.taskbar-lyrics-line[data-to-slot='2'] {
+  --lyric-to-y: 52px;
+}
+.taskbar-lyrics-viewport[data-lyric-transition-phase='entering']
+  .taskbar-lyrics-line,
+.taskbar-lyrics-viewport[data-lyric-transition-phase='animating']
+  .taskbar-lyrics-line {
+  will-change: transform, opacity;
+}
+.taskbar-lyrics-viewport[data-lyric-transition-phase='animating']
+  .taskbar-lyrics-line {
+  opacity: var(--lyric-to-opacity);
+  transform: translateY(calc(-50% + var(--lyric-to-y)));
+  transition:
+    transform 380ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 300ms ease;
+}
+.taskbar-lyrics-window[data-taskbar-lyrics-background='transparent']
+  .taskbar-lyrics-panel {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.taskbar-lyrics-window[data-taskbar-lyrics-background='transparent']
+  .taskbar-lyrics-window__previous,
+.taskbar-lyrics-window[data-taskbar-lyrics-background='transparent']
+  .taskbar-lyrics-window__next {
+  color: rgba(240, 248, 255, 0.86);
+  text-shadow:
+    -1px -1px 2px rgba(0, 0, 0, 0.8),
+    1px -1px 2px rgba(0, 0, 0, 0.8),
+    -1px 1px 2px rgba(0, 0, 0, 0.8),
+    1px 1px 2px rgba(0, 0, 0, 0.8);
+}
+.taskbar-lyrics-window[data-taskbar-lyrics-background='transparent']
+  .taskbar-lyrics-window__current {
+  text-shadow:
+    -1px -1px 3px rgba(0, 0, 0, 0.95),
+    1px -1px 3px rgba(0, 0, 0, 0.95),
+    -1px 1px 3px rgba(0, 0, 0, 0.95),
+    1px 1px 3px rgba(0, 0, 0, 0.95),
+    0 2px 8px rgba(0, 0, 0, 0.72);
+}
+.taskbar-lyrics-window[data-taskbar-lyrics-editing='true'] {
+  pointer-events: auto;
+}
+.taskbar-lyrics-window[data-taskbar-lyrics-editing='true']
+  .taskbar-lyrics-panel {
+  cursor: move;
+  outline: 1px solid color-mix(in srgb, var(--accent-strong) 72%, transparent);
+  outline-offset: -2px;
+  -webkit-app-region: drag;
+}
+.taskbar-lyrics-window[data-taskbar-lyrics-editing='true']
+  .taskbar-lyrics-panel__content {
+  opacity: 0.52;
+}
+.taskbar-lyrics-edit {
+  position: absolute;
+  inset: 8px 10px auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  pointer-events: auto;
+}
+.taskbar-lyrics-edit__handle,
+.taskbar-lyrics-edit__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.taskbar-lyrics-edit__handle svg {
+  width: 14px;
+  height: 14px;
+}
+.taskbar-lyrics-edit button {
+  min-height: 26px;
+  padding: 3px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  background: rgba(4, 17, 31, 0.76);
+  color: #fff;
+  cursor: pointer;
+  text-shadow: none;
+  -webkit-app-region: no-drag;
+}
+.taskbar-lyrics-window__previous,
+.taskbar-lyrics-window__next {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.taskbar-lyrics-window__previous {
+  opacity: 0.62;
+}
+.taskbar-lyrics-window__next {
+  opacity: 0.78;
+}
+.taskbar-lyrics-window__current {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 24px;
+  text-shadow: 0 1px 10px color-mix(in srgb, var(--accent) 34%, transparent);
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.taskbar-lyrics-window[data-taskbar-lyrics-status='instrumental']
+  .taskbar-lyrics-window__current,
+.taskbar-lyrics-window[data-taskbar-lyrics-status='no-lyrics']
+  .taskbar-lyrics-window__current,
+.taskbar-lyrics-window[data-taskbar-lyrics-status='hidden']
+  .taskbar-lyrics-window__current {
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 600;
+}
+@media (max-width: 650px) {
+  .taskbar-lyrics-window__previous {
+    display: none;
+  }
+}
+@media (max-width: 520px) {
+  .taskbar-lyrics-line[data-from-slot='-2'] {
+    --lyric-from-y: -24px;
+  }
+  .taskbar-lyrics-line[data-from-slot='-1'] {
+    --lyric-from-y: -12px;
+  }
+  .taskbar-lyrics-line[data-from-slot='1'] {
+    --lyric-from-y: 12px;
+  }
+  .taskbar-lyrics-line[data-from-slot='2'] {
+    --lyric-from-y: 24px;
+  }
+  .taskbar-lyrics-line[data-to-slot='-2'] {
+    --lyric-to-y: -24px;
+  }
+  .taskbar-lyrics-line[data-to-slot='-1'] {
+    --lyric-to-y: -12px;
+  }
+  .taskbar-lyrics-line[data-to-slot='1'] {
+    --lyric-to-y: 12px;
+  }
+  .taskbar-lyrics-line[data-to-slot='2'] {
+    --lyric-to-y: 24px;
+  }
+  .taskbar-lyrics-window__previous,
+  .taskbar-lyrics-window__next {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .taskbar-lyrics-viewport[data-lyric-transition-phase='entering']
+    .taskbar-lyrics-line,
+  .taskbar-lyrics-viewport[data-lyric-transition-phase='animating']
+    .taskbar-lyrics-line {
+    transform: translateY(calc(-50% + var(--lyric-to-y)));
+    transition: opacity 80ms linear;
+  }
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] {
+  grid-template-columns: minmax(150px, 0.9fr) minmax(300px, 1.7fr) auto;
+  gap: 10px;
+  padding: 2px 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  user-select: none;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__track,
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__center,
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__tools {
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 40%, transparent);
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__track {
+  padding: 2px 14px 2px 4px;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__center {
+  padding: 2px 14px;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__tools {
+  padding: 2px 10px;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__brand {
+  border-right: 0;
+  padding: 0 2px 0 6px;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__brand span {
+  display: none;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay']
+  .taskbar-mode__track
+  > .album-cover {
+  border-radius: 50%;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__play {
+  border-radius: 50%;
+  box-shadow: 0 1px 6px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__lyrics,
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__windows {
+  display: none;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__center {
+  grid-template-columns: auto minmax(120px, 1fr);
+  gap: 6px;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__track {
+  gap: 6px;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay']
+  .taskbar-mode__track
+  > .album-cover {
+  width: min(30px, calc(var(--taskbar-player-height, 40px) - 4px));
+  height: min(30px, calc(var(--taskbar-player-height, 40px) - 4px));
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .taskbar-mode__brand {
+  height: 26px;
+  padding-right: 6px;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay'] .icon-button {
+  width: 25px;
+  height: 25px;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay']
+  .taskbar-mode__progress {
+  gap: 4px;
+}
+.taskbar-mode[data-player-placement='taskbar-overlay']
+  .taskbar-mode__progress
+  span:last-child {
+  display: none;
+}
+@media (max-width: 760px) {
+  .taskbar-mode[data-player-placement='taskbar-overlay'] {
+    grid-template-columns: minmax(120px, 1fr) minmax(240px, 2fr) auto;
+    gap: 5px;
+    padding-inline: 6px;
+  }
+  .taskbar-mode[data-player-placement='taskbar-overlay']
+    .taskbar-mode__brand
+    span,
+  .taskbar-mode[data-player-placement='taskbar-overlay']
+    .taskbar-mode__controls
+    button:first-child,
+  .taskbar-mode[data-player-placement='taskbar-overlay']
+    .taskbar-mode__controls
+    button:last-child,
+  .taskbar-mode[data-player-placement='taskbar-overlay']
+    .taskbar-mode__tools
+    button:nth-of-type(2),
+  .taskbar-mode[data-player-placement='taskbar-overlay']
+    .taskbar-mode__tools
+    button:nth-of-type(3),
+  .taskbar-mode[data-player-placement='taskbar-overlay']
+    .taskbar-mode__volume {
+    display: none;
+  }
+  .taskbar-mode[data-player-placement='taskbar-overlay']
+    .taskbar-mode__center {
+    grid-template-columns: auto minmax(90px, 1fr);
+    gap: 4px;
+  }
+}
+@media (max-height: 38px) {
+  .taskbar-mode[data-player-placement='taskbar-overlay']
+    .taskbar-mode__track-copy
+    span {
+    display: none;
+  }
+}
 .taskbar-toggle {
   position: relative;
   display: flex;
@@ -2935,7 +3333,7 @@ kbd {
   justify-content: center;
   border: 1px solid var(--accent);
   border-radius: 6px;
-  background: #0b1020;
+  background: var(--bg);
   color: var(--accent-strong);
   cursor: ew-resize;
   touch-action: none;

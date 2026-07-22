@@ -42,6 +42,7 @@ import {
   initializeStore,
   resetData,
   setPublicData,
+  setStoredData,
   settingsSchema,
   type StoredTrack,
 } from './data'
@@ -86,6 +87,8 @@ import type {
   PlayerSnapshot,
   ScanProgress,
   Settings,
+  TaskbarLyricsCustomOffset,
+  TaskbarLyricsSnapshot,
   TaskbarModeAction,
   TaskbarModeState,
   TaskbarToggleSettingsPatch,
@@ -104,9 +107,17 @@ import { YouTubeExtensionManager, YOUTUBE_PARTITION } from './youtubeExtension'
 import {
   computeTaskbarToggleBounds,
   computeTaskbarHorizontalRange,
-  computeTaskbarRect,
   type TaskbarEdge,
 } from './taskbarGeometry'
+import {
+  calculateAboveTaskbarBounds,
+  calculateTaskbarOverlayGeometry,
+  detectTaskbarGeometry,
+  resolveTaskbarPlayerPlacement,
+  type TaskbarGeometry,
+  type TaskbarPlayerPlacement,
+} from './windows/taskbarOverlayPositioner'
+import { TaskbarLyricsWindowController } from './windows/taskbarLyricsWindow'
 
 if (
   process.env.PULSE_SHELF_UI_TEST === '1' ||
@@ -187,18 +198,18 @@ const snapshotSchema = z.object({
   repeatMode: z.enum(['off', 'one', 'all']),
 })
 
-function taskbarLyricsSnapshot(snapshot: PlayerSnapshot, settings: Settings) {
-  const hidden = { hasSync: false as const }
-  if (
-    !settings.taskbarLyricsEnabled ||
-    settings.taskbarLyricsDisplay === 'off' ||
-    !snapshot.currentTrack
-  )
-    return hidden
+function taskbarLyricsSnapshot(
+  snapshot: PlayerSnapshot,
+  settings: Settings,
+): TaskbarLyricsSnapshot {
+  if (!settings.taskbarLyricsEnabled || settings.taskbarLyricsDisplay === 'off')
+    return { status: 'hidden', hasSync: false }
+  if (!snapshot.currentTrack) return { status: 'no-track', hasSync: false }
   const data = getStoredData()
   const trackId = snapshot.currentTrack.id
   const lyrics = data.lyrics[trackId]
-  if (!lyrics || lyrics.instrumental) return hidden
+  if (!lyrics) return { status: 'no-lyrics', hasSync: false }
+  if (lyrics.instrumental) return { status: 'instrumental', hasSync: false }
 
   if (lyrics.syncedLyrics) {
     const profile = data.lyricsSyncProfiles[trackId]
@@ -210,28 +221,82 @@ function taskbarLyricsSnapshot(snapshot: PlayerSnapshot, settings: Settings) {
       lines.map((line) => line.time),
       snapshot.currentTime,
     )
-    if (activeIndex < 0 || !lines[activeIndex]?.text.trim()) return hidden
-    const nextLine =
-      settings.taskbarLyricsDisplay === 'current-next'
-        ? lines.slice(activeIndex + 1).find((line) => line.text.trim())?.text
-        : undefined
+    if (activeIndex < 0 || !lines[activeIndex]?.text.trim())
+      return { status: 'no-lyrics', hasSync: false }
+    let previousLineIndex: number | undefined
+    let nextLineIndex: number | undefined
+    if (settings.taskbarLyricsDisplay === 'current-next') {
+      for (let index = activeIndex - 1; index >= 0; index -= 1) {
+        if (!lines[index]?.text.trim()) continue
+        previousLineIndex = index
+        break
+      }
+      for (let index = activeIndex + 1; index < lines.length; index += 1) {
+        if (!lines[index]?.text.trim()) continue
+        nextLineIndex = index
+        break
+      }
+    }
     return {
       hasSync: true as const,
+      status: 'active' as const,
       source: 'synced' as const,
+      sequenceId: [
+        trackId,
+        lyrics.source,
+        lyrics.provider ?? '',
+        lyrics.providerTrackId ?? '',
+        lyrics.fetchedAt,
+      ].join(':'),
+      previousLine:
+        previousLineIndex === undefined
+          ? undefined
+          : lines[previousLineIndex]?.text,
       currentLine: lines[activeIndex].text,
-      nextLine,
+      nextLine:
+        nextLineIndex === undefined ? undefined : lines[nextLineIndex]?.text,
+      previousLineIndex,
+      currentLineIndex: activeIndex,
+      nextLineIndex,
     }
   }
 
-  if (!lyrics.plainLyrics) return hidden
+  if (!lyrics.plainLyrics) return { status: 'no-lyrics', hasSync: false }
   const timeline = data.generatedLyricsTimelines[trackId]
-  if (!timeline) return hidden
+  const textLines = splitGeneratedLyricsText(lyrics.plainLyrics).filter((line) =>
+    Boolean(line.trim()),
+  )
+  if (!timeline)
+    return {
+      status: 'unsynced',
+      hasSync: false,
+      source: 'plain',
+      currentLine: textLines[0],
+      currentLineIndex: 0,
+      nextLine:
+        settings.taskbarLyricsDisplay === 'current-next'
+          ? textLines[1]
+          : undefined,
+      nextLineIndex:
+        settings.taskbarLyricsDisplay === 'current-next' && textLines[1]
+          ? 1
+          : undefined,
+    }
   try {
     validateGeneratedLyricsTimeline(timeline, lyrics.plainLyrics)
   } catch {
-    return hidden
+    return {
+      status: 'unsynced',
+      hasSync: false,
+      source: 'plain',
+      currentLine: textLines[0],
+      nextLine:
+        settings.taskbarLyricsDisplay === 'current-next'
+          ? textLines[1]
+          : undefined,
+    }
   }
-  const textLines = splitGeneratedLyricsText(lyrics.plainLyrics)
+  const generatedTextLines = splitGeneratedLyricsText(lyrics.plainLyrics)
   const profile = data.lyricsSyncProfiles[trackId]
   const timingByLine = new Map(
     timeline.lines.map((line) => [
@@ -240,13 +305,21 @@ function taskbarLyricsSnapshot(snapshot: PlayerSnapshot, settings: Settings) {
     ]),
   )
   const activeIndex = findActiveLyricLineIndex(
-    textLines.map((_, index) => timingByLine.get(index)),
+    generatedTextLines.map((_, index) => timingByLine.get(index)),
     snapshot.currentTime,
   )
-  if (activeIndex < 0 || !textLines[activeIndex]?.trim()) return hidden
+  if (activeIndex < 0 || !generatedTextLines[activeIndex]?.trim())
+    return { status: 'no-lyrics', hasSync: false }
+  const previousLine =
+    settings.taskbarLyricsDisplay === 'current-next'
+      ? generatedTextLines
+          .slice(0, activeIndex)
+          .reverse()
+          .find((text) => text.trim())
+      : undefined
   const nextLine =
     settings.taskbarLyricsDisplay === 'current-next'
-      ? textLines
+      ? generatedTextLines
           .slice(activeIndex + 1)
           .find((text, offset) =>
             Boolean(text.trim() && timingByLine.has(activeIndex + offset + 1)),
@@ -254,9 +327,27 @@ function taskbarLyricsSnapshot(snapshot: PlayerSnapshot, settings: Settings) {
       : undefined
   return {
     hasSync: true as const,
+    status: 'active' as const,
     source: 'generated' as const,
-    currentLine: textLines[activeIndex],
+    sequenceId: [
+      trackId,
+      lyrics.source,
+      lyrics.fetchedAt,
+      timeline.createdAt,
+      timeline.lyricsTextHash,
+    ].join(':'),
+    previousLine,
+    currentLine: generatedTextLines[activeIndex],
     nextLine,
+    previousLineIndex:
+      previousLine === undefined
+        ? undefined
+        : generatedTextLines.lastIndexOf(previousLine, activeIndex - 1),
+    currentLineIndex: activeIndex,
+    nextLineIndex:
+      nextLine === undefined
+        ? undefined
+        : generatedTextLines.indexOf(nextLine, activeIndex + 1),
   }
 }
 
@@ -271,6 +362,10 @@ const viewBoundsSchema = z.object({
   y: z.number().int().min(0).max(20_000),
   width: z.number().int().min(1).max(20_000),
   height: z.number().int().min(1).max(20_000),
+})
+const taskbarLyricsDragPositionSchema = z.object({
+  x: z.number().int().min(-100_000).max(100_000),
+  y: z.number().int().min(-100_000).max(100_000),
 })
 
 let mainWindow: BrowserWindow | null = null
@@ -298,6 +393,7 @@ let taskbarToggleDrag:
   { startScreenX: number; startWindowX: number; displayId: number } | undefined
 let pulseTaskbarVisible = false
 let taskbarRepositionListener: (() => void) | undefined
+let taskbarRepositionTimer: NodeJS.Timeout | undefined
 let taskbarBrowserWindowBlurListener: (() => void) | undefined
 const taskbarToggleRetopTimers = new Set<NodeJS.Timeout>()
 let taskbarToggleRecoveryTimer: NodeJS.Timeout | undefined
@@ -317,6 +413,18 @@ function refreshTaskbarLyrics() {
 }
 let quitCleanupComplete = false
 const taskbarEdges = new Map<number, TaskbarEdge>()
+const taskbarOverlayGeometries = new Map<number, TaskbarGeometry>()
+const taskbarGeometryWarnings = new Set<number>()
+interface TaskbarWindowPlacement {
+  displayId: number
+  requested: TaskbarPlayerPlacement
+  effective: TaskbarPlayerPlacement
+  edge: TaskbarEdge
+  bounds: Rectangle
+  taskbarThickness: number | null
+}
+let taskbarWindowPlacement: TaskbarWindowPlacement | null = null
+let taskbarLyricsWindowController: TaskbarLyricsWindowController | null = null
 
 const preloadPath = path.join(import.meta.dirname, 'preload.mjs')
 const YOUTUBE_HOME = 'https://www.youtube.com/'
@@ -395,11 +503,14 @@ function assertMainSender(event: IpcMainInvokeEvent | IpcMainEvent) {
 }
 
 function assertTrustedSender(event: IpcMainInvokeEvent | IpcMainEvent) {
+  const taskbarLyricsWebContentsId =
+    taskbarLyricsWindowController?.getState().webContentsId
   const ids = [
     mainWindow?.webContents.id,
     miniWindow?.webContents.id,
     taskbarModeWindow?.webContents.id,
     taskbarToggleWindow?.webContents.id,
+    taskbarLyricsWebContentsId,
   ].filter(Boolean)
   if (!ids.includes(event.sender.id))
     throw new Error('허용되지 않은 요청입니다.')
@@ -499,7 +610,7 @@ function createYouTubeView() {
       partition: YOUTUBE_PARTITION,
     },
   })
-  youtubeView.setBackgroundColor('#0B1020')
+  youtubeView.setBackgroundColor('#0C1A2C')
   const contents = youtubeView.webContents
   contents.session.setPermissionRequestHandler(
     (_webContents, _permission, callback) => callback(false),
@@ -570,7 +681,12 @@ function reloadYouTubeViewForExtension() {
 
 async function loadRenderer(
   window: BrowserWindow,
-  mode: 'main' | 'mini' | 'taskbarMode' | 'taskbarToggle' = 'main',
+  mode:
+    | 'main'
+    | 'mini'
+    | 'taskbarMode'
+    | 'taskbarToggle'
+    | 'taskbarLyrics' = 'main',
 ) {
   const query = mode === 'main' ? '' : `?${mode}=1`
   const devUrl = process.env.VITE_DEV_SERVER_URL
@@ -628,7 +744,7 @@ function createMainWindow() {
     minWidth: 1280,
     minHeight: 720,
     icon: assetPath('icon.png'),
-    backgroundColor: '#0B1020',
+    backgroundColor: '#0C1A2C',
     show: false,
     webPreferences: {
       preload: preloadPath,
@@ -687,7 +803,7 @@ async function createMiniWindow() {
     resizable: true,
     alwaysOnTop: getStoredData().settings.miniAlwaysOnTop,
     icon: assetPath('icon.png'),
-    backgroundColor: '#0B1020',
+    backgroundColor: '#0C1A2C',
     show: false,
     webPreferences: {
       preload: preloadPath,
@@ -718,16 +834,53 @@ function currentTaskbarDisplay() {
     return screen.getDisplayMatching(taskbarToggleWindow.getBounds())
   if (mainWindow && !mainWindow.isDestroyed())
     return screen.getDisplayMatching(mainWindow.getBounds())
-  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  return screen.getPrimaryDisplay()
 }
 
-function taskbarModeBounds(display = currentTaskbarDisplay()) {
-  const result = computeTaskbarRect(
-    display,
-    taskbarEdges.get(display.id) ?? 'bottom',
-  )
-  taskbarEdges.set(display.id, result.edge)
-  return result
+function taskbarModePlacement(
+  display = currentTaskbarDisplay(),
+): TaskbarWindowPlacement {
+  const requested = getStoredData().settings.taskbarPlayerPlacement
+  const supported = resolveTaskbarPlayerPlacement(requested)
+  if (supported === 'taskbar-overlay') {
+    const geometry = calculateTaskbarOverlayGeometry(display)
+    if (geometry) {
+      taskbarOverlayGeometries.set(display.id, geometry)
+      taskbarGeometryWarnings.delete(display.id)
+      return {
+        displayId: display.id,
+        requested,
+        effective: supported,
+        edge: geometry.edge,
+        bounds: geometry.overlayBounds,
+        taskbarThickness: geometry.thickness,
+      }
+    }
+    const cached = taskbarOverlayGeometries.get(display.id)
+    if (cached)
+      return {
+        displayId: display.id,
+        requested,
+        effective: supported,
+        edge: cached.edge,
+        bounds: cached.overlayBounds,
+        taskbarThickness: cached.thickness,
+      }
+    if (!app.isPackaged && !taskbarGeometryWarnings.has(display.id)) {
+      taskbarGeometryWarnings.add(display.id)
+      log.debug(
+        `Taskbar overlay geometry unavailable for display ${display.id}; using above-taskbar placement`,
+      )
+    }
+  }
+  return {
+    displayId: display.id,
+    requested,
+    effective: requested === 'disabled' ? 'disabled' : 'above',
+    edge: detectTaskbarGeometry(display)?.edge ?? 'bottom',
+    bounds: calculateAboveTaskbarBounds(display),
+    taskbarThickness: null,
+  }
 }
 
 function taskbarTogglePlacement(display = currentTaskbarDisplay()) {
@@ -755,10 +908,90 @@ function setWindowBounds(window: BrowserWindow, bounds: Rectangle) {
     window.setBounds(bounds, false)
 }
 
+function taskbarLyricsAnchor() {
+  const window = taskbarModeWindow
+  const placement = taskbarWindowPlacement
+  if (
+    !window ||
+    window.isDestroyed() ||
+    !placement ||
+    placement.effective !== 'taskbar-overlay'
+  )
+    return null
+  const playerBounds = window.getBounds()
+  const display = screen.getDisplayMatching(playerBounds)
+  const settings = getStoredData().settings
+  return {
+    playerBounds,
+    displayBounds: display.bounds,
+    edge: placement.edge,
+    position: settings.taskbarLyricsPosition,
+    alignment: settings.taskbarLyricsAlignment,
+    customOffset: settings.taskbarLyricsCustomOffset,
+  }
+}
+
+function persistTaskbarLyricsCustomOffset(
+  offset: TaskbarLyricsCustomOffset | null,
+) {
+  const data = getStoredData()
+  const current = data.settings.taskbarLyricsCustomOffset
+  if (
+    (current === null && offset === null) ||
+    (current !== null &&
+      offset !== null &&
+      current.x === offset.x &&
+      current.y === offset.y)
+  )
+    return
+  setStoredData({
+    ...data,
+    settings: { ...data.settings, taskbarLyricsCustomOffset: offset },
+  })
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send(IPC.taskbarLyricsSettingsChanged, {
+      taskbarLyricsCustomOffset: offset,
+    })
+}
+
+function getTaskbarLyricsWindowController() {
+  taskbarLyricsWindowController ??= new TaskbarLyricsWindowController({
+    preloadPath,
+    configureWindow: secureWindow,
+    loadRenderer: (window) => loadRenderer(window, 'taskbarLyrics'),
+    onReady: (window) => {
+      if (lastSnapshot) window.webContents.send(IPC.playerSnapshot, lastSnapshot)
+      window.webContents.send(IPC.taskbarModeState, taskbarModeState())
+    },
+    onStateChanged: sendTaskbarModeState,
+    onCustomOffsetChanged: persistTaskbarLyricsCustomOffset,
+  })
+  return taskbarLyricsWindowController
+}
+
+function syncTaskbarLyricsWindow() {
+  const controller = taskbarLyricsWindowController
+  if (!controller) return
+  const anchor = taskbarLyricsAnchor()
+  if (
+    anchor &&
+    pulseTaskbarVisible &&
+    taskbarModeWindow?.isVisible()
+  ) {
+    controller.reposition(anchor)
+    void controller.showIfDesired(anchor).catch((error: unknown) =>
+      log.error('Taskbar lyrics window failed to show', error),
+    )
+  } else controller.suspend()
+}
+
 function repositionTaskbarWindows() {
   const display = currentTaskbarDisplay()
-  if (taskbarModeWindow && !taskbarModeWindow.isDestroyed())
-    setWindowBounds(taskbarModeWindow, taskbarModeBounds(display))
+  if (taskbarModeWindow && !taskbarModeWindow.isDestroyed()) {
+    const placement = taskbarModePlacement(display)
+    taskbarWindowPlacement = placement
+    setWindowBounds(taskbarModeWindow, placement.bounds)
+  }
   if (
     taskbarToggleWindow &&
     !taskbarToggleWindow.isDestroyed() &&
@@ -768,6 +1001,19 @@ function repositionTaskbarWindows() {
     setWindowBounds(taskbarToggleWindow, placement)
     applyTaskbarToggleShape(taskbarToggleWindow, placement)
   }
+  syncTaskbarLyricsWindow()
+}
+
+function scheduleTaskbarReposition() {
+  if (taskbarRepositionTimer) clearTimeout(taskbarRepositionTimer)
+  taskbarRepositionTimer = setTimeout(() => {
+    taskbarRepositionTimer = undefined
+    const displayIds = new Set(screen.getAllDisplays().map(({ id }) => id))
+    for (const id of taskbarOverlayGeometries.keys())
+      if (!displayIds.has(id)) taskbarOverlayGeometries.delete(id)
+    repositionTaskbarWindows()
+    sendTaskbarModeState()
+  }, 120)
 }
 
 function applyTaskbarToggleShape(
@@ -798,7 +1044,10 @@ function stopTaskbarToggleRecovery() {
 }
 
 function taskbarToggleShouldBeVisible() {
-  return getStoredData().settings.taskbarModeEnabled && !pulseTaskbarVisible
+  return (
+    getStoredData().settings.taskbarPlayerPlacement !== 'disabled' &&
+    !pulseTaskbarVisible
+  )
 }
 
 function hideTaskbarToggleWindow() {
@@ -814,7 +1063,7 @@ function reinforceTaskbarToggleWindow() {
   if (
     !window ||
     window.isDestroyed() ||
-    !getStoredData().settings.taskbarModeEnabled ||
+    getStoredData().settings.taskbarPlayerPlacement === 'disabled' ||
     pulseTaskbarVisible
   )
     return
@@ -920,9 +1169,36 @@ function endTaskbarToggleDrag(screenX: number) {
 }
 
 function taskbarModeState(): TaskbarModeState {
-  const enabled = getStoredData().settings.taskbarModeEnabled
+  const settings = getStoredData().settings
+  const placement = settings.taskbarPlayerPlacement
+  const enabled = placement !== 'disabled'
+  const effectivePlacement = enabled
+    ? (taskbarWindowPlacement?.effective ??
+      resolveTaskbarPlayerPlacement(placement))
+    : 'disabled'
+  const lyricsWindowState = taskbarLyricsWindowController?.getState()
   return {
     enabled,
+    placement,
+    effectivePlacement,
+    supportsTaskbarOverlay: process.platform === 'win32',
+    windowBounds:
+      taskbarModeWindow && !taskbarModeWindow.isDestroyed()
+        ? taskbarModeWindow.getBounds()
+        : null,
+    taskbarThickness: taskbarWindowPlacement?.taskbarThickness ?? null,
+    repositionListenerCount: taskbarRepositionListener ? 1 : 0,
+    playerWindowCount:
+      taskbarModeWindow && !taskbarModeWindow.isDestroyed() ? 1 : 0,
+    lyricsWindowVisible: lyricsWindowState?.visible ?? false,
+    lyricsWindowRequested: lyricsWindowState?.desiredVisible ?? false,
+    lyricsWindowCount: lyricsWindowState?.windowCount ?? 0,
+    lyricsWindowBounds: lyricsWindowState?.bounds ?? null,
+    lyricsWindowEditing: lyricsWindowState?.editing ?? false,
+    lyricsWindowClickThrough: lyricsWindowState?.clickThrough ?? true,
+    lyricsWindowFocusable: lyricsWindowState?.focusable ?? false,
+    lyricsWindowMoveListenerCount: lyricsWindowState?.moveListenerCount ?? 0,
+    lyricsBackgroundMode: settings.taskbarLyricsBackgroundMode,
     pulseTaskbarVisible: enabled && pulseTaskbarVisible,
     modeWindowVisible: Boolean(taskbarModeWindow?.isVisible()),
     toggleWindowVisible: Boolean(taskbarToggleWindow?.isVisible()),
@@ -941,6 +1217,7 @@ function sendTaskbarModeState() {
     if (window && !window.isDestroyed())
       window.webContents.send(IPC.taskbarModeState, state)
   }
+  taskbarLyricsWindowController?.send(IPC.taskbarModeState, state)
   updateTrayMenu()
 }
 
@@ -953,13 +1230,14 @@ function taskbarWindowOptions(bounds: Rectangle) {
     roundedCorners: false,
     transparent: false,
     resizable: false,
+    movable: false,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
     show: false,
-    backgroundColor: '#0B1020',
+    backgroundColor: '#0C1A2C',
     webPreferences: {
       preload: preloadPath,
       nodeIntegration: false,
@@ -985,17 +1263,22 @@ async function createTaskbarModeWindow() {
   if (taskbarModeWindow && !taskbarModeWindow.isDestroyed())
     return taskbarModeWindow
   const settings = getStoredData().settings
+  const placement = taskbarModePlacement()
+  taskbarWindowPlacement = placement
   const window = new BrowserWindow({
-    ...taskbarWindowOptions(taskbarModeBounds()),
+    ...taskbarWindowOptions(placement.bounds),
     title: 'Pulse Shelf Taskbar Mode',
     opacity: settings.taskbarModeOpacity,
+    transparent: true,
+    backgroundColor: '#00000000',
   })
   taskbarModeWindow = window
   secureWindow(window)
-  setWindowBounds(window, taskbarModeBounds())
+  setWindowBounds(window, placement.bounds)
   window.setMenuBarVisibility(false)
   window.on('closed', () => {
     taskbarModeWindow = null
+    taskbarWindowPlacement = null
     if (!isQuitting && pulseTaskbarVisible) void setPulseTaskbarVisible(false)
   })
   try {
@@ -1032,8 +1315,8 @@ async function createTaskbarModeWindow() {
       throw new Error(
         `Taskbar mode renderer validation failed: ${JSON.stringify(validation)}`,
       )
-    window.setAlwaysOnTop(true, 'screen-saver')
-    setWindowBounds(window, taskbarModeBounds())
+    window.setAlwaysOnTop(true, 'pop-up-menu')
+    repositionTaskbarWindows()
   } catch (error) {
     log.error(
       'Pulse Shelf taskbar mode failed; restoring Windows taskbar',
@@ -1055,7 +1338,7 @@ async function createTaskbarToggleWindow() {
   const window = new BrowserWindow({
     ...taskbarWindowOptions(placement),
     title: 'Pulse Shelf Taskbar Toggle',
-    backgroundColor: '#0B1020',
+    backgroundColor: '#0C1A2C',
     focusable: false,
   })
   taskbarToggleWindow = window
@@ -1076,7 +1359,8 @@ async function createTaskbarToggleWindow() {
 }
 
 async function setPulseTaskbarVisible(visible: boolean) {
-  const enabled = getStoredData().settings.taskbarModeEnabled
+  const enabled =
+    getStoredData().settings.taskbarPlayerPlacement !== 'disabled'
   pulseTaskbarVisible = enabled && visible
   taskbarStateStore.set('pulseTaskbarVisible', pulseTaskbarVisible)
   try {
@@ -1111,6 +1395,7 @@ async function setPulseTaskbarVisible(visible: boolean) {
     }
   }
   taskbarStateStore.set('pulseTaskbarVisible', pulseTaskbarVisible)
+  syncTaskbarLyricsWindow()
   sendTaskbarModeState()
   return taskbarModeState()
 }
@@ -1123,7 +1408,8 @@ function performTaskbarModeAction(action: TaskbarModeAction) {
 
 function registerTaskbarShortcut(settings: Settings) {
   const shouldRegister =
-    settings.taskbarModeEnabled && settings.taskbarModeShortcuts
+    settings.taskbarPlayerPlacement !== 'disabled' &&
+    settings.taskbarModeShortcuts
   if (taskbarShortcutEnabled === shouldRegister) return
   taskbarShortcutEnabled = shouldRegister
   globalShortcut.unregister(TASKBAR_SHORTCUT)
@@ -1141,14 +1427,18 @@ function registerTaskbarShortcut(settings: Settings) {
 
 function applyTaskbarModeSettings(settings: Settings, initial = false) {
   if (!taskbarStateStore) return
-  const becameEnabled = settings.taskbarModeEnabled && !taskbarLastEnabled
-  taskbarLastEnabled = settings.taskbarModeEnabled
+  if (taskbarWindowPlacement?.requested !== settings.taskbarPlayerPlacement)
+    taskbarWindowPlacement = null
+  const enabled = settings.taskbarPlayerPlacement !== 'disabled'
+  const becameEnabled = enabled && !taskbarLastEnabled
+  taskbarLastEnabled = enabled
   registerTaskbarShortcut(settings)
   taskbarModeWindow?.setOpacity(settings.taskbarModeOpacity)
-  if (!settings.taskbarModeEnabled) {
+  if (!enabled) {
     pulseTaskbarVisible = false
     taskbarModeWindow?.hide()
     hideTaskbarToggleWindow()
+    taskbarLyricsWindowController?.suspend()
     taskbarStateStore.set('pulseTaskbarVisible', false)
     sendTaskbarModeState()
     return
@@ -1167,14 +1457,14 @@ function applyTaskbarModeSettings(settings: Settings, initial = false) {
 }
 
 function initializeTaskbarMode(settings: Settings) {
-  taskbarLastEnabled = settings.taskbarModeEnabled
+  taskbarLastEnabled = settings.taskbarPlayerPlacement !== 'disabled'
   registerTaskbarShortcut(settings)
-  taskbarRepositionListener = () => {
-    repositionTaskbarWindows()
+  if (!taskbarRepositionListener) {
+    taskbarRepositionListener = scheduleTaskbarReposition
+    screen.on('display-added', taskbarRepositionListener)
+    screen.on('display-removed', taskbarRepositionListener)
+    screen.on('display-metrics-changed', taskbarRepositionListener)
   }
-  screen.on('display-added', taskbarRepositionListener)
-  screen.on('display-removed', taskbarRepositionListener)
-  screen.on('display-metrics-changed', taskbarRepositionListener)
   taskbarBrowserWindowBlurListener = () => scheduleTaskbarToggleRetop()
   app.on('browser-window-blur', taskbarBrowserWindowBlurListener)
   applyTaskbarModeSettings(settings, true)
@@ -1777,6 +2067,51 @@ function registerIpc() {
     assertTrustedSender(event)
     return performTaskbarModeAction(taskbarModeActionSchema.parse(value))
   })
+  ipcMain.handle(IPC.taskbarLyricsToggle, async (event) => {
+    assertTrustedSender(event)
+    const anchor = taskbarLyricsAnchor()
+    if (!anchor || !pulseTaskbarVisible || !taskbarModeWindow?.isVisible())
+      return taskbarModeState()
+    const controller = getTaskbarLyricsWindowController()
+    await controller.toggle(anchor)
+    if (lastSnapshot) controller.send(IPC.playerSnapshot, lastSnapshot)
+    sendTaskbarModeState()
+    return taskbarModeState()
+  })
+  ipcMain.handle(IPC.taskbarLyricsEditEnter, async (event) => {
+    assertTrustedSender(event)
+    const anchor = taskbarLyricsAnchor()
+    const controller = taskbarLyricsWindowController
+    if (!anchor || !controller?.getState().visible) return taskbarModeState()
+    await controller.enterEditMode(anchor)
+    sendTaskbarModeState()
+    return taskbarModeState()
+  })
+  ipcMain.handle(IPC.taskbarLyricsEditExit, (event) => {
+    assertTrustedSender(event)
+    taskbarLyricsWindowController?.exitEditMode()
+    sendTaskbarModeState()
+    return taskbarModeState()
+  })
+  ipcMain.handle(IPC.taskbarLyricsPositionReset, (event) => {
+    assertTrustedSender(event)
+    persistTaskbarLyricsCustomOffset(null)
+    const anchor = taskbarLyricsAnchor()
+    if (anchor)
+      taskbarLyricsWindowController?.resetPosition({
+        ...anchor,
+        customOffset: null,
+      })
+    sendTaskbarModeState()
+    return taskbarModeState()
+  })
+  ipcMain.handle(IPC.taskbarLyricsDragPosition, (event, value: unknown) => {
+    assertTrustedSender(event)
+    const position = taskbarLyricsDragPositionSchema.parse(value)
+    taskbarLyricsWindowController?.updateEditPosition(position.x, position.y)
+    sendTaskbarModeState()
+    return taskbarModeState()
+  })
   ipcMain.handle(IPC.taskbarToggleDragStart, (event, value: unknown) => {
     assertTrustedSender(event)
     startTaskbarToggleDrag(taskbarToggleScreenXSchema.parse(value))
@@ -1960,6 +2295,7 @@ function registerIpc() {
       lastSnapshot = snapshot
       miniWindow?.webContents.send(IPC.playerSnapshot, snapshot)
       taskbarModeWindow?.webContents.send(IPC.playerSnapshot, snapshot)
+      taskbarLyricsWindowController?.send(IPC.playerSnapshot, snapshot)
       const trayKey = `${snapshot.currentTrack?.id}:${snapshot.isPlaying}`
       if (trayKey !== lastTrayKey) {
         lastTrayKey = trayKey
@@ -1982,6 +2318,7 @@ function registerIpc() {
         miniWindow?.webContents.id,
         taskbarModeWindow?.webContents.id,
         taskbarToggleWindow?.webContents.id,
+        taskbarLyricsWindowController?.getState().webContentsId,
       ].filter(Boolean)
       if (!trustedIds.includes(event.sender.id)) return
       if (typeof message === 'string')
@@ -2756,6 +3093,10 @@ app.on('before-quit', (event) => {
   quitCleanupComplete = true
   clearTaskbarToggleRetopTimers()
   stopTaskbarToggleRecovery()
+  if (taskbarRepositionTimer) {
+    clearTimeout(taskbarRepositionTimer)
+    taskbarRepositionTimer = undefined
+  }
   if (taskbarRepositionListener) {
     screen.removeListener('display-added', taskbarRepositionListener)
     screen.removeListener('display-removed', taskbarRepositionListener)
@@ -2775,6 +3116,8 @@ app.on('before-quit', (event) => {
   tray?.destroy()
   taskbarModeWindow?.destroy()
   taskbarModeWindow = null
+  taskbarLyricsWindowController?.destroy()
+  taskbarLyricsWindowController = null
   taskbarToggleWindow?.destroy()
   taskbarToggleWindow = null
 })

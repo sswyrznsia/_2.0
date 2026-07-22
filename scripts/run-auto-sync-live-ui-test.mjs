@@ -243,7 +243,7 @@ async function prepareIsolatedStore(realStoreBytes, isolatedStorePath) {
     closeBehavior: 'quit',
     autoFetchLyricsOnImport: false,
     autoFetchLyricsOnPlay: false,
-    taskbarModeEnabled: false,
+    taskbarPlayerPlacement: 'disabled',
     taskbarModeShowOnStartup: false,
   }
   data.onboardingCompleted = true

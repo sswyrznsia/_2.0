@@ -28,6 +28,7 @@ import type {
   SyncPackageStatus,
   TaskbarModeAction,
   TaskbarModeState,
+  TaskbarLyricsSettingsPatch,
   TaskbarToggleSettingsPatch,
   TrackRemovalDetails,
   ViewBounds,
@@ -90,6 +91,12 @@ export const IPC = {
   taskbarModeAction: 'window:taskbar-mode-action',
   taskbarModeGetState: 'window:taskbar-mode-get-state',
   taskbarModeState: 'window:taskbar-mode-state',
+  taskbarLyricsToggle: 'window:taskbar-lyrics-toggle',
+  taskbarLyricsEditEnter: 'window:taskbar-lyrics-edit-enter',
+  taskbarLyricsEditExit: 'window:taskbar-lyrics-edit-exit',
+  taskbarLyricsPositionReset: 'window:taskbar-lyrics-position-reset',
+  taskbarLyricsDragPosition: 'window:taskbar-lyrics-drag-position',
+  taskbarLyricsSettingsChanged: 'window:taskbar-lyrics-settings-changed',
   taskbarToggleDragStart: 'window:taskbar-toggle-drag-start',
   taskbarToggleDragMove: 'window:taskbar-toggle-drag-move',
   taskbarToggleDragEnd: 'window:taskbar-toggle-drag-end',
@@ -203,6 +210,17 @@ export interface ElectronApi {
   closeMiniPlayer: () => Promise<void>
   taskbarModeAction: (action: TaskbarModeAction) => Promise<TaskbarModeState>
   getTaskbarModeState: () => Promise<TaskbarModeState>
+  toggleTaskbarLyrics: () => Promise<TaskbarModeState>
+  enterTaskbarLyricsPositionEdit: () => Promise<TaskbarModeState>
+  exitTaskbarLyricsPositionEdit: () => Promise<TaskbarModeState>
+  resetTaskbarLyricsPosition: () => Promise<TaskbarModeState>
+  updateTaskbarLyricsDragPosition: (
+    x: number,
+    y: number,
+  ) => Promise<TaskbarModeState>
+  onTaskbarLyricsSettingsChanged: (
+    listener: (patch: TaskbarLyricsSettingsPatch) => void,
+  ) => () => void
   onTaskbarModeState: (
     listener: (state: TaskbarModeState) => void,
   ) => () => void

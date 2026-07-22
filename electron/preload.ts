@@ -7,6 +7,7 @@ import type {
   PlayerCommand,
   PlayerSnapshot,
   TaskbarModeState,
+  TaskbarLyricsSettingsPatch,
   TaskbarToggleSettingsPatch,
 } from '../src/types/models'
 import type { ScanProgress, YouTubeViewState } from '../src/types/models'
@@ -111,6 +112,24 @@ const api: ElectronApi = {
   taskbarModeAction: (action) =>
     ipcRenderer.invoke(IPC.taskbarModeAction, action),
   getTaskbarModeState: () => ipcRenderer.invoke(IPC.taskbarModeGetState),
+  toggleTaskbarLyrics: () => ipcRenderer.invoke(IPC.taskbarLyricsToggle),
+  enterTaskbarLyricsPositionEdit: () =>
+    ipcRenderer.invoke(IPC.taskbarLyricsEditEnter),
+  exitTaskbarLyricsPositionEdit: () =>
+    ipcRenderer.invoke(IPC.taskbarLyricsEditExit),
+  resetTaskbarLyricsPosition: () =>
+    ipcRenderer.invoke(IPC.taskbarLyricsPositionReset),
+  updateTaskbarLyricsDragPosition: (x, y) =>
+    ipcRenderer.invoke(IPC.taskbarLyricsDragPosition, { x, y }),
+  onTaskbarLyricsSettingsChanged: (listener) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      patch: TaskbarLyricsSettingsPatch,
+    ) => listener(patch)
+    ipcRenderer.on(IPC.taskbarLyricsSettingsChanged, handler)
+    return () =>
+      ipcRenderer.removeListener(IPC.taskbarLyricsSettingsChanged, handler)
+  },
   onTaskbarModeState: (listener) => {
     const handler = (
       _event: Electron.IpcRendererEvent,

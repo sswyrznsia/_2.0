@@ -1,7 +1,7 @@
 {
   "name": "pulse-shelf-2",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "A local-first desktop music player",
   "author": "Pulse Shelf",
   "type": "module",
@@ -72,6 +72,7 @@
     "files": [
       "dist/**",
       "dist-electron/**",
+      "!dist-electron/*Test-*.js",
       "package.json"
     ],
     "extraResources": [

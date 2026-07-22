@@ -10,7 +10,12 @@ import {
   Upload,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import type { YouTubeExtensionStatus } from '../types/models'
+import type {
+  TaskbarLyricsAlignment,
+  TaskbarLyricsBackgroundMode,
+  TaskbarLyricsPosition,
+  YouTubeExtensionStatus,
+} from '../types/models'
 import { useAppStore } from '../stores/appStore'
 import { usePlayerStore } from '../stores/playerStore'
 import { SyncPackageSettings } from '../components/settings/SyncPackageSettings'
@@ -32,11 +37,17 @@ export function SettingsPage() {
     useState<YouTubeExtensionStatus | null>(null)
   const [extensionBusy, setExtensionBusy] = useState(false)
   const [extensionMessage, setExtensionMessage] = useState('')
+  const [supportsTaskbarOverlay, setSupportsTaskbarOverlay] = useState(false)
   useEffect(() => {
     void window.electronAPI
       .getYouTubeExtensionStatus()
       .then(setYouTubeExtension)
       .catch(() => setExtensionMessage('확장 프로그램 상태를 불러오지 못했습니다.'))
+  }, [])
+  useEffect(() => {
+    void window.electronAPI
+      .getTaskbarModeState()
+      .then((state) => setSupportsTaskbarOverlay(state.supportsTaskbarOverlay))
   }, [])
   if (!data) return null
 
@@ -70,13 +81,35 @@ export function SettingsPage() {
         </div>
       </header>
       <section className="settings-section">
-        <h2>작업표시줄 교체 모드</h2>
-        <SettingToggle
-          label="Pulse Shelf 작업표시줄 모드 사용"
-          description="Windows 작업표시줄 위를 Pulse Shelf 전용 재생 제어 막대로 덮습니다."
-          checked={data.settings.taskbarModeEnabled}
-          onChange={(value) => updateSettings({ taskbarModeEnabled: value })}
-        />
+        <h2>작업표시줄 플레이어</h2>
+        <label className="setting-row">
+          <span>
+            <strong>작업표시줄 플레이어 위치</strong>
+            <small>Pulse Shelf 재생 제어 막대가 표시될 위치를 선택합니다.</small>
+          </span>
+          <select
+            value={
+              !supportsTaskbarOverlay &&
+              data.settings.taskbarPlayerPlacement === 'taskbar-overlay'
+                ? 'above'
+                : data.settings.taskbarPlayerPlacement
+            }
+            onChange={(event) =>
+              updateSettings({
+                taskbarPlayerPlacement: event.target.value as
+                  | 'above'
+                  | 'taskbar-overlay'
+                  | 'disabled',
+              })
+            }
+          >
+            <option value="above">작업표시줄 위</option>
+            {supportsTaskbarOverlay && (
+              <option value="taskbar-overlay">작업표시줄 안</option>
+            )}
+            <option value="disabled">사용 안 함</option>
+          </select>
+        </label>
         <SettingToggle
           label="앱 시작 시 Pulse Shelf 작업표시줄 표시"
           description="앱을 시작할 때 교체 모드를 바로 표시합니다."
@@ -208,6 +241,69 @@ export function SettingsPage() {
             <option value="current-next">현재 + 다음 줄</option>
           </select>
         </label>
+        {supportsTaskbarOverlay && (
+          <>
+            <label className="setting-row">
+              <span>
+                <strong>작업표시줄 가사 위치</strong>
+                <small>가사 창을 플레이어 위나 아래에 표시합니다.</small>
+              </span>
+              <select
+                value={data.settings.taskbarLyricsPosition}
+                disabled={!data.settings.taskbarLyricsEnabled}
+                onChange={(event) =>
+                  updateSettings({
+                    taskbarLyricsPosition: event.target
+                      .value as TaskbarLyricsPosition,
+                  })
+                }
+              >
+                <option value="auto">자동</option>
+                <option value="above-player">플레이어 위</option>
+                <option value="below-player">플레이어 아래</option>
+              </select>
+            </label>
+            <label className="setting-row">
+              <span>
+                <strong>작업표시줄 가사 정렬</strong>
+                <small>가사 창을 플레이어 기준으로 정렬합니다.</small>
+              </span>
+              <select
+                value={data.settings.taskbarLyricsAlignment}
+                disabled={!data.settings.taskbarLyricsEnabled}
+                onChange={(event) =>
+                  updateSettings({
+                    taskbarLyricsAlignment: event.target
+                      .value as TaskbarLyricsAlignment,
+                  })
+                }
+              >
+                <option value="left">왼쪽</option>
+                <option value="center">가운데</option>
+                <option value="right">오른쪽</option>
+              </select>
+            </label>
+            <label className="setting-row">
+              <span>
+                <strong>작업표시줄 가사 배경</strong>
+                <small>둥근 반투명 패널 또는 배경 없는 텍스트를 선택합니다.</small>
+              </span>
+              <select
+                value={data.settings.taskbarLyricsBackgroundMode}
+                disabled={!data.settings.taskbarLyricsEnabled}
+                onChange={(event) =>
+                  updateSettings({
+                    taskbarLyricsBackgroundMode: event.target
+                      .value as TaskbarLyricsBackgroundMode,
+                  })
+                }
+              >
+                <option value="panel">반투명 패널</option>
+                <option value="transparent">텍스트만</option>
+              </select>
+            </label>
+          </>
+        )}
       </section>
       <section className="settings-section">
         <h2>화면</h2>

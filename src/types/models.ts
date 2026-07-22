@@ -84,7 +84,7 @@ export interface Settings {
   autoFetchLyricsOnPlay: boolean
   preferSyncedLyrics: boolean
   lyricsAutoMatchThreshold: number
-  taskbarModeEnabled: boolean
+  taskbarPlayerPlacement: TaskbarPlayerPlacement
   taskbarModeShowOnStartup: boolean
   taskbarModeRestoreLastState: boolean
   taskbarTogglePosition: 'left' | 'custom' | 'right'
@@ -94,10 +94,43 @@ export interface Settings {
   taskbarModeOpacity: number
   taskbarLyricsEnabled: boolean
   taskbarLyricsDisplay: 'off' | 'current' | 'current-next'
+  taskbarLyricsPosition: TaskbarLyricsPosition
+  taskbarLyricsAlignment: TaskbarLyricsAlignment
+  taskbarLyricsBackgroundMode: TaskbarLyricsBackgroundMode
+  taskbarLyricsCustomOffset: TaskbarLyricsCustomOffset | null
+}
+
+export type TaskbarPlayerPlacement = 'above' | 'taskbar-overlay' | 'disabled'
+export type TaskbarLyricsPosition = 'auto' | 'above-player' | 'below-player'
+export type TaskbarLyricsAlignment = 'left' | 'center' | 'right'
+export type TaskbarLyricsBackgroundMode = 'panel' | 'transparent'
+export interface TaskbarLyricsCustomOffset {
+  x: number
+  y: number
+}
+
+export interface TaskbarLyricsSettingsPatch {
+  taskbarLyricsCustomOffset: TaskbarLyricsCustomOffset | null
 }
 
 export interface TaskbarModeState {
   enabled: boolean
+  placement: TaskbarPlayerPlacement
+  effectivePlacement: TaskbarPlayerPlacement
+  supportsTaskbarOverlay: boolean
+  windowBounds: { x: number; y: number; width: number; height: number } | null
+  taskbarThickness: number | null
+  repositionListenerCount: number
+  playerWindowCount: number
+  lyricsWindowVisible: boolean
+  lyricsWindowRequested: boolean
+  lyricsWindowCount: number
+  lyricsWindowBounds: { x: number; y: number; width: number; height: number } | null
+  lyricsWindowEditing: boolean
+  lyricsWindowClickThrough: boolean
+  lyricsWindowFocusable: boolean
+  lyricsWindowMoveListenerCount: number
+  lyricsBackgroundMode: TaskbarLyricsBackgroundMode
   pulseTaskbarVisible: boolean
   modeWindowVisible: boolean
   toggleWindowVisible: boolean
@@ -412,10 +445,24 @@ export interface PlayerSnapshot {
 }
 
 export interface TaskbarLyricsSnapshot {
+  status:
+    | 'hidden'
+    | 'no-track'
+    | 'active'
+    | 'instrumental'
+    | 'unsynced'
+    | 'no-lyrics'
+    | 'error'
+  previousLine?: string
   currentLine?: string
   nextLine?: string
+  previousLineIndex?: number
+  currentLineIndex?: number
+  nextLineIndex?: number
+  sequenceId?: string
   hasSync: boolean
-  source?: 'synced' | 'generated'
+  source?: 'synced' | 'generated' | 'plain'
+  errorMessage?: string
 }
 
 export type PlayerCommand =

@@ -1,8 +1,10 @@
 import {
+  Captions,
   Disc3,
   ListMusic,
   Maximize2,
   Minus,
+  Move,
   Pause,
   Play,
   Plus,
@@ -14,19 +16,43 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react'
-import { useEffect, useRef, useState, type PointerEvent } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent,
+} from 'react'
 import type {
   PlayerCommand,
   PlayerSnapshot,
+  TaskbarLyricsSnapshot,
   TaskbarModeAction,
   TaskbarModeState,
 } from '../../types/models'
 import { formatTime } from '../../utils/format'
 import { AlbumCover } from '../common/AlbumCover'
 import { IconButton } from '../common/IconButton'
+import { TaskbarLyricsLines } from './TaskbarLyricsLines'
 
 const emptyState: TaskbarModeState = {
   enabled: false,
+  placement: 'disabled',
+  effectivePlacement: 'disabled',
+  supportsTaskbarOverlay: false,
+  windowBounds: null,
+  taskbarThickness: null,
+  repositionListenerCount: 0,
+  playerWindowCount: 0,
+  lyricsWindowVisible: false,
+  lyricsWindowRequested: false,
+  lyricsWindowCount: 0,
+  lyricsWindowBounds: null,
+  lyricsWindowEditing: false,
+  lyricsWindowClickThrough: true,
+  lyricsWindowFocusable: false,
+  lyricsWindowMoveListenerCount: 0,
+  lyricsBackgroundMode: 'panel',
   pulseTaskbarVisible: false,
   modeWindowVisible: false,
   toggleWindowVisible: false,
@@ -41,7 +67,15 @@ function useTaskbarRuntime() {
     const unsubscribePlayer = window.electronAPI.onPlayerSnapshot(setPlayer)
     const unsubscribeMode = window.electronAPI.onTaskbarModeState(setModeState)
     void window.electronAPI.getTaskbarModeState().then(setModeState)
-    document.documentElement.dataset.theme = 'dark'
+    void window.electronAPI.loadData().then((data) => {
+      const theme =
+        data.settings.theme === 'system'
+          ? window.matchMedia('(prefers-color-scheme: light)').matches
+            ? 'light'
+            : 'dark'
+          : data.settings.theme
+      document.documentElement.dataset.theme = theme
+    })
     return () => {
       unsubscribePlayer()
       unsubscribeMode()
@@ -57,7 +91,7 @@ function useTaskbarRuntime() {
 }
 
 export function TaskbarMode() {
-  const { player, action, command } = useTaskbarRuntime()
+  const { player, modeState, action, command } = useTaskbarRuntime()
   const track = player?.currentTrack
   const progressMax = Math.max(player?.duration ?? 0, 0.01)
   const currentTime = Math.min(player?.currentTime ?? 0, progressMax)
@@ -67,7 +101,22 @@ export function TaskbarMode() {
     .join('\n')
 
   return (
-    <main className="taskbar-mode" aria-label="Pulse Shelf 작업표시줄">
+    <main
+      className="taskbar-mode"
+      data-player-placement={modeState.effectivePlacement}
+      style={
+        modeState.windowBounds
+          ? ({
+              '--taskbar-player-width': `${modeState.windowBounds.width}px`,
+              '--taskbar-player-height': `${modeState.windowBounds.height}px`,
+              '--taskbar-thickness': modeState.taskbarThickness
+                ? `${modeState.taskbarThickness}px`
+                : '0px',
+            } as CSSProperties)
+          : undefined
+      }
+      aria-label="Pulse Shelf 작업표시줄"
+    >
       <div className="taskbar-mode__track">
         <button
           type="button"
@@ -151,7 +200,9 @@ export function TaskbarMode() {
         </div>
       </div>
 
-      {lyrics?.hasSync && lyrics.currentLine && (
+      {modeState.effectivePlacement !== 'taskbar-overlay' &&
+        lyrics?.hasSync &&
+        lyrics.currentLine && (
         <div
           className="taskbar-mode__lyrics"
           data-taskbar-lyrics-source={lyrics.source}
@@ -161,7 +212,7 @@ export function TaskbarMode() {
           <strong key={lyrics.currentLine}>{lyrics.currentLine}</strong>
           {lyrics.nextLine && <span>{lyrics.nextLine}</span>}
         </div>
-      )}
+        )}
 
       <div className="taskbar-mode__tools">
         <IconButton
@@ -194,6 +245,37 @@ export function TaskbarMode() {
         >
           <Maximize2 />
         </IconButton>
+        {modeState.effectivePlacement === 'taskbar-overlay' && (
+          <IconButton
+            className="taskbar-mode__lyrics-button"
+            label={
+              modeState.lyricsWindowVisible ? '가사 숨기기' : '가사 표시'
+            }
+            active={modeState.lyricsWindowRequested}
+            onClick={() => void window.electronAPI.toggleTaskbarLyrics()}
+          >
+            <Captions />
+          </IconButton>
+        )}
+        {modeState.effectivePlacement === 'taskbar-overlay' &&
+          modeState.lyricsWindowVisible && (
+            <IconButton
+              className="taskbar-mode__lyrics-position"
+              label={
+                modeState.lyricsWindowEditing
+                  ? '가사 위치 조정 완료'
+                  : '가사 위치 조정'
+              }
+              active={modeState.lyricsWindowEditing}
+              onClick={() =>
+                void (modeState.lyricsWindowEditing
+                  ? window.electronAPI.exitTaskbarLyricsPositionEdit()
+                  : window.electronAPI.enterTaskbarLyricsPositionEdit())
+              }
+            >
+              <Move />
+            </IconButton>
+          )}
         <IconButton
           className="taskbar-mode__windows"
           label="Windows 작업표시줄로 돌아가기"
@@ -202,6 +284,85 @@ export function TaskbarMode() {
         >
           <Minus />
         </IconButton>
+      </div>
+    </main>
+  )
+}
+
+export function TaskbarLyricsCompanion() {
+  const { player, modeState } = useTaskbarRuntime()
+  const lyrics = player?.lyrics
+  let status: TaskbarLyricsSnapshot['status'] | 'loading' =
+    lyrics?.status ?? 'loading'
+  let previousLine = lyrics?.previousLine ?? ''
+  let currentLine = lyrics?.currentLine ?? ''
+  const nextLine = lyrics?.nextLine ?? ''
+
+  if (!player) {
+    status = 'loading'
+    currentLine = '가사를 불러오는 중…'
+  } else if (status === 'hidden') {
+    currentLine = '설정에서 작업표시줄 가사를 켜 주세요.'
+  } else if (status === 'no-track') {
+    currentLine = '재생 중인 곡이 없습니다.'
+  } else if (status === 'instrumental') {
+    currentLine = '연주곡으로 표시된 곡입니다.'
+  } else if (status === 'no-lyrics') {
+    currentLine = '표시할 가사가 없습니다.'
+  } else if (status === 'error') {
+    currentLine = lyrics?.errorMessage ?? '가사를 표시하지 못했습니다.'
+  } else if (status === 'unsynced') {
+    previousLine = ''
+    currentLine ||= '시간 정보가 없는 가사입니다.'
+  }
+
+  return (
+    <main
+      className="taskbar-lyrics-window"
+      data-taskbar-lyrics-window="true"
+      data-taskbar-lyrics-status={status}
+      data-taskbar-lyrics-background={modeState.lyricsBackgroundMode}
+      data-taskbar-lyrics-editing={modeState.lyricsWindowEditing}
+      aria-live="polite"
+      aria-label="Pulse Shelf 작업표시줄 가사"
+    >
+      <div className="taskbar-lyrics-panel">
+        <div className="taskbar-lyrics-panel__content">
+          <TaskbarLyricsLines
+            trackId={player?.currentTrack?.id}
+            status={status}
+            lyrics={lyrics}
+            previousLine={previousLine}
+            currentLine={currentLine}
+            nextLine={nextLine}
+          />
+        </div>
+        {modeState.lyricsWindowEditing && (
+          <div className="taskbar-lyrics-edit" aria-label="가사 위치 조정">
+            <span className="taskbar-lyrics-edit__handle">
+              <Move />
+              드래그하여 이동
+            </span>
+            <span className="taskbar-lyrics-edit__actions">
+              <button
+                type="button"
+                onClick={() =>
+                  void window.electronAPI.resetTaskbarLyricsPosition()
+                }
+              >
+                위치 초기화
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void window.electronAPI.exitTaskbarLyricsPositionEdit()
+                }
+              >
+                완료
+              </button>
+            </span>
+          </div>
+        )}
       </div>
     </main>
   )
